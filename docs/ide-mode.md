@@ -42,6 +42,10 @@ that runs on another device shows an explanation instead of an editor.
   Zeron `Theme`, alpha included, so washes and frosted surfaces work and
   appearance changes never touch Helix. A `theme` set in `config.toml` is
   used verbatim.
+- **Floating layers as cards.** Pickers, popups, menus and the info box
+  clear their area with overlay tokens. The painter turns each such region
+  into a card in its own layer: shadow, blur on frosted surfaces, rounded
+  fill, hairline border. Box-drawing characters become 1px lines.
 - **Keys** are taken in a keystroke interceptor, ahead of Zeron's app-wide
   bindings. While the editor has focus it takes every key except ⌘ chords it
   does not claim (`keymap::PLATFORM_KEYS`; a test keeps that list in sync
@@ -108,13 +112,15 @@ borrows compiled grammars from an existing Helix install.
 
 ## Not done yet
 
-- **Native Zeron components for Helix's UI.** Pickers, prompt, popups
-  (completion, hover, signature help), the which-key info box and the
-  statusline are still drawn by Helix into the cell grid, TUI borders
-  included. The next step is to render them as frosted Zeron components
-  from their state, and keep Helix from drawing those layers.
-- **Standard mode's typing does not replace a selection** yet. Helix inserts
-  at the cursor, so typed text needs a delete-selection step first.
+- **Helix's floating layers are restyled, not rebuilt.** Pickers, popups,
+  menus and the info box render as Zeron cards (`paint.rs`), and the
+  statusline as a strip with mode pills. Their contents are still Helix's
+  cell layout (monospace rows, `>` markers). Fully native components would
+  need each layer's state exposed from `helix-term`.
+- **Standard mode's selection highlight runs one character past the caret.**
+  Typing, pasting, Backspace and Delete act on the caret-style selection
+  (`standard.rs`), but Helix still paints its range, which always includes
+  the character under the cursor.
 - **Off macOS, Ctrl chords go to the editor** while it has focus, and
   Zeron's `Mod` shortcuts (Ctrl there) are shadowed. `Mod-Shift-I` is one of
   them.

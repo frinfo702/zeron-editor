@@ -116,8 +116,11 @@ const STANDARD_LAYER: &str = r#"
 "S-down" = "extend_visual_line_down"
 "S-home" = "extend_to_line_start"
 "S-end" = "extend_to_line_end"
-"A-left" = "move_prev_word_start"
-"A-right" = "move_next_word_end"
+# Word jumps leave a caret, not Helix's word selection: collapsing a
+# backward selection lands on its start, a forward one on its last char,
+# hence the extra step right.
+"A-left" = ["move_prev_word_start", "collapse_selection"]
+"A-right" = ["move_next_word_end", "collapse_selection", "move_char_right"]
 "A-S-left" = "extend_prev_word_start"
 "A-S-right" = "extend_next_word_end"
 "Cmd-left" = "goto_line_start"

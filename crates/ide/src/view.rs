@@ -32,7 +32,7 @@ use crate::{
     host::{Frame, HelixHost, HostOptions},
     keymap, keys,
     paint::{self, Geometry, GridPaint},
-    theme,
+    standard, theme,
 };
 
 /// Key context set on the editor; the interceptor only acts inside it.
@@ -300,8 +300,21 @@ impl HelixEditor {
         let Some(key) = keys::to_helix(keystroke) else {
             return false;
         };
-        self.send(Event::Key(key));
+        self.send_key(key);
         true
+    }
+
+    /// Send a key, with standard mode's replace-the-selection rules.
+    fn send_key(&self, key: helix_view::input::KeyEvent) {
+        match &self.host {
+            Some(host)
+                if keymap::is_modeless(self.settings.keymap)
+                    && standard::classify(&key) != standard::Edit::Other =>
+            {
+                host.call(move |app| standard::apply_key(app, key));
+            }
+            _ => self.send(Event::Key(key)),
+        }
     }
 
     fn on_geometry(&mut self, geometry: Geometry) {
@@ -495,7 +508,7 @@ impl EntityInputHandler for HelixEditor {
     ) {
         self.marked = None;
         for key in keys::text_to_helix(text) {
-            self.send(Event::Key(key));
+            self.send_key(key);
         }
         cx.notify();
     }
