@@ -14,8 +14,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use futures::{StreamExt as _, channel::mpsc};
 use gpui::{
-    App, Bounds, Context, Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
+    App, Bounds, Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
+    EventEmitter, FocusHandle, Focusable, GlobalElementId, UTF16Selection, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
     SharedString, ShapedLine, Style, Subscription, Task, TextRun, Window, div, fill, point,
     prelude::*, px, relative, size,
@@ -97,6 +97,9 @@ pub struct HelixEditor {
     drag_button: Option<HelixButton>,
     /// Sub-line scroll remainder, in lines.
     scroll_carry: f32,
+    /// IME composition in progress. It is drawn at the cursor but not sent
+    /// to Helix until the IME commits it.
+    marked: Option<String>,
     _wake: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -210,6 +213,7 @@ impl HelixEditor {
             sent_grid: None,
             drag_button: None,
             scroll_carry: 0.0,
+            marked: None,
             _wake: wake,
             _subscriptions: vec![intercept, focus_in, focus_out],
         }
@@ -437,6 +441,131 @@ fn helix_button(button: MouseButton) -> Option<HelixButton> {
     }
 }
 
+/// The platform text-input side (IME, dead keys, the emoji picker).
+///
+/// Helix owns the document, so this handler exposes no document text: the
+/// only text it knows is the current composition, and a commit is replayed
+/// into Helix as typed keys. Plain keys never come through here — they are
+/// taken by the keystroke interceptor first — except while an IME composes.
+impl EntityInputHandler for HelixEditor {
+    fn text_for_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        adjusted: &mut Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        let marked = self.marked.as_deref().unwrap_or_default();
+        let range = utf16_to_byte_range(marked, range);
+        *adjusted = Some(byte_to_utf16_range(marked, range.clone()));
+        Some(marked[range].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let end = self.marked.as_deref().map_or(0, utf16_len);
+        Some(UTF16Selection {
+            range: end..end,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<std::ops::Range<usize>> {
+        self.marked.as_deref().map(|marked| 0..utf16_len(marked))
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.marked.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.marked = None;
+        for key in keys::text_to_helix(text) {
+            self.send(Event::Key(key));
+        }
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.marked = (!text.is_empty()).then(|| text.to_string());
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _: std::ops::Range<usize>,
+        _: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        // Candidate windows anchor under the cursor cell.
+        let g = self.geometry?;
+        let (col, row) = self.frame.as_ref()?.cursor?;
+        Some(Bounds::new(
+            point(
+                g.origin.x + g.cell_w * col as f32,
+                g.origin.y + g.line_h * row as f32,
+            ),
+            size(g.cell_w, g.line_h),
+        ))
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
+        self.host.is_some() && self.frame.as_ref().is_some_and(|frame| frame.accepts_text)
+    }
+}
+
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+fn utf16_to_byte_range(text: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    let byte = |utf16: usize| {
+        let mut count = 0;
+        for (ix, ch) in text.char_indices() {
+            if count >= utf16 {
+                return ix;
+            }
+            count += ch.len_utf16();
+        }
+        text.len()
+    };
+    let (start, end) = (byte(range.start), byte(range.end));
+    start.min(end)..end
+}
+
+fn byte_to_utf16_range(text: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    utf16_len(&text[..range.start])..utf16_len(&text[..range.end])
+}
+
 impl Focusable for HelixEditor {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -510,6 +639,9 @@ struct GridPaint {
     lines: Vec<(Point<Pixels>, ShapedLine)>,
     line_h: Pixels,
     cursor: Option<PaintQuad>,
+    /// IME composition drawn over the cursor: its backing and text.
+    marked: Option<(PaintQuad, Point<Pixels>, ShapedLine)>,
+    focus: FocusHandle,
 }
 
 impl Element for HelixGrid {
@@ -572,9 +704,14 @@ impl Element for HelixGrid {
             cols: ((inner_w / f32::from(cell_w)).floor() as i64).clamp(2, 1000) as u16,
             rows: ((inner_h / f32::from(line_h)).floor() as i64).clamp(1, 1000) as u16,
         };
-        let (frame, focused) = self.editor.update(cx, |editor, _| {
+        let (frame, focused, focus, marked) = self.editor.update(cx, |editor, _| {
             editor.on_geometry(geometry);
-            (editor.frame.clone(), editor.focus.is_focused(window))
+            (
+                editor.frame.clone(),
+                editor.focus.is_focused(window),
+                editor.focus.clone(),
+                editor.marked.clone(),
+            )
         });
         let Some(frame) = frame else {
             return GridPaint {
@@ -582,9 +719,49 @@ impl Element for HelixGrid {
                 lines: Vec::new(),
                 line_h,
                 cursor: None,
+                marked: None,
+                focus,
             };
         };
-        paint_frame(&frame, &geometry, &theme, &mono, font_size, focused, window)
+        let mut paint =
+            paint_frame(&frame, &geometry, &theme, &mono, font_size, focused, focus, window);
+        paint.marked = marked.zip(frame.cursor).map(|(text, (col, row))| {
+            let origin = point(
+                geometry.origin.x + geometry.cell_w * col as f32,
+                geometry.origin.y + geometry.line_h * row as f32,
+            );
+            let len = text.len();
+            let shaped = window.text_system().shape_line(
+                text.into(),
+                font_size,
+                &[TextRun {
+                    len,
+                    font: mono.clone(),
+                    color: theme.text,
+                    background_color: None,
+                    underline: Some(gpui::UnderlineStyle {
+                        color: Some(theme.text),
+                        thickness: px(1.0),
+                        wavy: false,
+                    }),
+                    strikethrough: None,
+                }],
+                None,
+            );
+            let backing = fill(
+                Bounds::new(origin, size(shaped.width, geometry.line_h)),
+                theme.surface_dialog,
+            );
+            (backing, origin, shaped)
+        });
+        // The caret moves to the end of the composition while it shows.
+        if let Some((backing, _, _)) = &paint.marked {
+            paint.cursor = paint.cursor.take().map(|mut cursor| {
+                cursor.bounds.origin.x = backing.bounds.origin.x + backing.bounds.size.width;
+                cursor
+            });
+        }
+        paint
     }
 
     fn paint(
@@ -604,10 +781,19 @@ impl Element for HelixGrid {
             for (origin, line) in &paint.lines {
                 let _ = line.paint(*origin, paint.line_h, gpui::TextAlign::Left, None, window, cx);
             }
+            if let Some((backing, origin, line)) = paint.marked.take() {
+                window.paint_quad(backing);
+                let _ = line.paint(origin, paint.line_h, gpui::TextAlign::Left, None, window, cx);
+            }
             if let Some(cursor) = paint.cursor.take() {
                 window.paint_quad(cursor);
             }
         });
+        window.handle_input(
+            &paint.focus,
+            ElementInputHandler::new(bounds, self.editor.clone()),
+            cx,
+        );
     }
 }
 
@@ -659,6 +845,7 @@ fn paint_frame(
     mono: &gpui::Font,
     font_size: Pixels,
     focused: bool,
+    focus: FocusHandle,
     window: &Window,
 ) -> GridPaint {
     let buffer = &frame.buffer;
@@ -798,5 +985,22 @@ fn paint_frame(
         lines,
         line_h: g.line_h,
         cursor,
+        marked: None,
+        focus,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utf16_ranges_map_onto_composition_bytes() {
+        let text = "にほんご😀";
+        assert_eq!(utf16_len(text), 6);
+        assert_eq!(utf16_to_byte_range(text, 0..2), 0..6);
+        assert_eq!(utf16_to_byte_range(text, 4..6), 12..16);
+        assert_eq!(utf16_to_byte_range(text, 0..99), 0..text.len());
+        assert_eq!(byte_to_utf16_range(text, 3..16), 1..6);
     }
 }

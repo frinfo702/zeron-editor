@@ -40,6 +40,9 @@ pub struct Frame {
     pub cursor: Option<(u16, u16)>,
     pub cursor_kind: CursorKind,
     pub mode: Mode,
+    /// Whether typed text goes somewhere (insert mode, or a prompt or picker
+    /// on top) — the platform IME only composes while this holds.
+    pub accepts_text: bool,
 }
 
 impl Frame {
@@ -49,8 +52,17 @@ impl Frame {
             cursor: frame.cursor,
             cursor_kind: frame.cursor_kind,
             mode: frame.editor.mode(),
+            accepts_text: accepts_text(frame),
         }
     }
+}
+
+fn accepts_text(frame: &HelixFrame<'_>) -> bool {
+    let top = frame.compositor.top_type_name().unwrap_or_default();
+    // Picker embeds a Prompt, so both names cover filtering pickers too.
+    top.contains("Prompt")
+        || top.contains("Picker")
+        || frame.editor.mode() == Mode::Insert
 }
 
 #[derive(Default)]

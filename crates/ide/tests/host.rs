@@ -53,11 +53,18 @@ fn edits_and_saves_a_file_through_the_host() {
     let screen: String = frame.buffer.content.iter().map(|c| c.symbol.as_str()).collect();
     assert!(screen.contains("world"), "document not painted");
 
-    for k in ["i", "h", "e", "l", "l", "o", "space", "esc", ":", "w", "ret"] {
+    for k in ["i", "h", "e", "l", "l", "o", "space"] {
+        host.send(key(k));
+    }
+    // An IME commit arrives as text and is replayed as typed keys.
+    for event in zeron_ide::keys::text_to_helix("日本語 ") {
+        host.send(Event::Key(event));
+    }
+    for k in ["esc", ":", "w", "ret"] {
         host.send(key(k));
     }
     wait_until("file written", || {
-        std::fs::read_to_string(&file).unwrap() == "hello world\n"
+        std::fs::read_to_string(&file).unwrap() == "hello 日本語 world\n"
     });
 
     // Closing the last view keeps Helix alive with a scratch buffer: Helix

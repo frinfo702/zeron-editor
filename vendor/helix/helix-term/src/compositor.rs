@@ -191,6 +191,12 @@ impl Compositor {
         (None, CursorKind::Hidden)
     }
 
+    /// zeron: the type name of the front-most layer, for a host that needs
+    /// to know what currently takes input (the editor, a prompt, a picker…).
+    pub fn top_type_name(&self) -> Option<&'static str> {
+        self.layers.last().map(|layer| layer.type_name())
+    }
+
     pub fn has_component(&self, type_name: &str) -> bool {
         self.layers
             .iter()
