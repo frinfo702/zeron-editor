@@ -30,44 +30,51 @@ use crate::{
 };
 
 use log::{debug, error, info, warn};
-#[cfg(not(feature = "integration"))]
+#[cfg(not(any(feature = "integration", feature = "headless")))]
 use std::io::stdout;
 use std::{io::stdin, path::Path, sync::Arc};
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, feature = "headless")))]
 use anyhow::Context;
 use anyhow::Error;
 
 use crossterm::{event::Event as CrosstermEvent, tty::IsTty};
-#[cfg(not(windows))]
+// zeron: a headless host owns the process; Helix must not install signal
+// handlers (SIGINT/SIGTERM would otherwise be swallowed for the whole app).
+#[cfg(not(any(windows, feature = "headless")))]
 use {signal_hook::consts::signal, signal_hook_tokio::Signals};
-#[cfg(windows)]
+#[cfg(any(windows, feature = "headless"))]
 type Signals = futures_util::stream::Empty<()>;
 
-#[cfg(not(feature = "integration"))]
+#[cfg(not(any(feature = "integration", feature = "headless")))]
 use tui::backend::CrosstermBackend;
 
-#[cfg(feature = "integration")]
+#[cfg(any(feature = "integration", feature = "headless"))]
 use tui::backend::TestBackend;
 
-#[cfg(not(feature = "integration"))]
+#[cfg(not(any(feature = "integration", feature = "headless")))]
 type TerminalBackend = CrosstermBackend<std::io::Stdout>;
 
-#[cfg(feature = "integration")]
+// zeron: headless renders into an in-memory buffer that the host paints.
+#[cfg(any(feature = "integration", feature = "headless"))]
 type TerminalBackend = TestBackend;
 
 type Terminal = tui::terminal::Terminal<TerminalBackend>;
 
 pub struct Application {
-    compositor: Compositor,
+    // zeron: `pub` so a headless host can drive layers and jobs directly.
+    pub compositor: Compositor,
     terminal: Terminal,
     pub editor: Editor,
 
     config: Arc<ArcSwap<Config>>,
 
     signals: Signals,
-    jobs: Jobs,
+    pub jobs: Jobs,
     lsp_progress: LspProgressMap,
+
+    #[cfg(feature = "headless")]
+    frame_sink: Option<headless::FrameSink>,
 }
 
 #[cfg(feature = "integration")]
@@ -103,11 +110,15 @@ impl Application {
         theme_parent_dirs.extend(helix_loader::runtime_dirs().iter().cloned());
         let theme_loader = theme::Loader::new(&theme_parent_dirs);
 
-        #[cfg(not(feature = "integration"))]
+        #[cfg(not(any(feature = "integration", feature = "headless")))]
         let backend = CrosstermBackend::new(stdout(), &config.editor);
 
         #[cfg(feature = "integration")]
         let backend = TestBackend::new(120, 150);
+
+        // zeron: the host sends its real size as the first `Event::Resize`.
+        #[cfg(all(feature = "headless", not(feature = "integration")))]
+        let backend = TestBackend::new(80, 24);
 
         let terminal = Terminal::new(backend)?;
         let area = terminal.size().expect("couldn't get terminal size");
@@ -214,7 +225,7 @@ impl Application {
             } else {
                 editor.new_file(Action::VerticalSplit);
             }
-        } else if stdin().is_tty() || cfg!(feature = "integration") {
+        } else if stdin().is_tty() || cfg!(any(feature = "integration", feature = "headless")) {
             editor.new_file(Action::VerticalSplit);
         } else {
             editor
@@ -222,9 +233,9 @@ impl Application {
                 .unwrap_or_else(|_| editor.new_file(Action::VerticalSplit));
         }
 
-        #[cfg(windows)]
+        #[cfg(any(windows, feature = "headless"))]
         let signals = futures_util::stream::empty();
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, feature = "headless")))]
         let signals = Signals::new([
             signal::SIGTSTP,
             signal::SIGCONT,
@@ -242,6 +253,8 @@ impl Application {
             signals,
             jobs: Jobs::new(),
             lsp_progress: LspProgressMap::new(),
+            #[cfg(feature = "headless")]
+            frame_sink: None,
         };
 
         Ok(app)
@@ -278,6 +291,17 @@ impl Application {
 
         let pos = pos.map(|pos| (pos.col as u16, pos.row as u16));
         self.terminal.draw(pos, kind).unwrap();
+
+        #[cfg(feature = "headless")]
+        if let Some(sink) = self.frame_sink.as_mut() {
+            sink(headless::Frame {
+                buffer: self.terminal.backend().buffer(),
+                cursor: pos,
+                cursor_kind: kind,
+                editor: &self.editor,
+                compositor: &self.compositor,
+            });
+        }
     }
 
     pub async fn event_loop<S>(&mut self, input_stream: &mut S)
@@ -460,13 +484,13 @@ impl Application {
         editor.set_theme(theme);
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, feature = "headless"))]
     // no signal handling available on windows
     pub async fn handle_signals(&mut self, _signal: ()) -> bool {
         true
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, feature = "headless")))]
     pub async fn handle_signals(&mut self, signal: i32) -> bool {
         match signal {
             signal::SIGTSTP => {
@@ -1172,5 +1196,122 @@ impl Application {
         }
 
         errs
+    }
+}
+
+// zeron: headless host API. Everything below is Zeron-owned glue.
+#[cfg(feature = "headless")]
+pub mod headless {
+    use super::*;
+    use helix_view::graphics::CursorKind;
+    use tui::buffer::Buffer;
+
+    /// One rendered frame, handed to the host right after Helix draws.
+    pub struct Frame<'a> {
+        pub buffer: &'a Buffer,
+        pub cursor: Option<(u16, u16)>,
+        pub cursor_kind: CursorKind,
+        pub editor: &'a Editor,
+        pub compositor: &'a Compositor,
+    }
+
+    pub type FrameSink = Box<dyn FnMut(Frame<'_>) + Send>;
+
+    /// Work the host queues onto the Helix thread.
+    pub enum Input {
+        /// A key, mouse, paste, focus or resize event.
+        Event(Event),
+        /// Run arbitrary code against the application, then redraw.
+        Call(Box<dyn FnOnce(&mut Application) + Send>),
+    }
+
+    impl Application {
+        pub fn set_frame_sink(&mut self, sink: FrameSink) {
+            self.frame_sink = Some(sink);
+        }
+
+        /// Re-read config.toml / languages.toml from disk (`:config-reload`).
+        pub fn reload_config(&mut self) {
+            self.refresh_config();
+        }
+
+        /// Force a frame out to the sink.
+        pub async fn redraw(&mut self) {
+            self.render().await;
+        }
+
+        async fn handle_host_event(&mut self, event: Event) {
+            let mut cx = crate::compositor::Context {
+                editor: &mut self.editor,
+                jobs: &mut self.jobs,
+                scroll: None,
+            };
+            let should_redraw = match event {
+                Event::Resize(width, height) => {
+                    self.terminal.backend_mut().resize(width, height);
+                    self.terminal
+                        .resize(Rect::new(0, 0, width, height))
+                        .expect("Unable to resize terminal");
+                    let area = self.terminal.size().expect("couldn't get terminal size");
+                    self.compositor.resize(area);
+                    self.compositor
+                        .handle_event(&Event::Resize(width, height), &mut cx)
+                }
+                event => self.compositor.handle_event(&event, &mut cx),
+            };
+            if should_redraw && !self.editor.should_close() {
+                self.render().await;
+            }
+        }
+
+        /// The terminal event loop with host input in place of crossterm.
+        /// Returns when the editor quits or the input stream ends; the
+        /// caller then runs [`Application::close`].
+        pub async fn run_headless<S>(&mut self, input: &mut S)
+        where
+            S: Stream<Item = Input> + Unpin,
+        {
+            use futures_util::StreamExt;
+
+            self.render().await;
+            loop {
+                if self.editor.should_close() {
+                    return;
+                }
+                tokio::select! {
+                    biased;
+
+                    next = input.next() => match next {
+                        Some(Input::Event(event)) => self.handle_host_event(event).await,
+                        Some(Input::Call(call)) => {
+                            call(self);
+                            self.render().await;
+                        }
+                        None => return,
+                    },
+                    Some(callback) = self.jobs.callbacks.recv() => {
+                        self.jobs.handle_callback(&mut self.editor, &mut self.compositor, Ok(Some(callback)));
+                        self.render().await;
+                    }
+                    Some(msg) = self.jobs.status_messages.recv() => {
+                        let severity = match msg.severity {
+                            helix_event::status::Severity::Hint => Severity::Hint,
+                            helix_event::status::Severity::Info => Severity::Info,
+                            helix_event::status::Severity::Warning => Severity::Warning,
+                            helix_event::status::Severity::Error => Severity::Error,
+                        };
+                        self.editor.status_msg = Some((msg.message, severity));
+                        helix_event::request_redraw();
+                    }
+                    Some(callback) = self.jobs.wait_futures.next() => {
+                        self.jobs.handle_callback(&mut self.editor, &mut self.compositor, callback);
+                        self.render().await;
+                    }
+                    event = self.editor.wait_event() => {
+                        self.handle_editor_event(event).await;
+                    }
+                }
+            }
+        }
     }
 }

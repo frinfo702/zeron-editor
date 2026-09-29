@@ -21,3 +21,12 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
   build time; Zeron does this at runtime.
 - `Cargo.lock` and `rust-toolchain.toml` removed: the Zeron workspace lockfile
   and toolchain govern the build.
+- `helix-loader`: `initialize_host_dirs` lets a host own the config, cache and
+  runtime directories (Zeron keeps them under its data dir).
+- `helix-stdx`: `set_host_owns_process_cwd` keeps Helix's working directory in
+  its own static instead of `std::env::set_current_dir`; the subprocesses that
+  relied on the process cwd (shell commands, `%sh{}`, DAP) pass it explicitly.
+- `helix-term`: `headless` feature — renders into an in-memory buffer, hands
+  each frame to a host sink, takes input from a host stream
+  (`application::headless`), installs no signal handlers. `compositor` and
+  `jobs` on `Application` are `pub` for the host.

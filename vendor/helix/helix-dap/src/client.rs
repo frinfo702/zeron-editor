@@ -118,6 +118,7 @@ impl Client {
         let cmd = helix_stdx::env::which(cmd)?;
 
         let process = Command::new(cmd)
+            .current_dir(helix_stdx::env::current_working_dir()) // zeron: host keeps the process cwd
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -169,6 +170,7 @@ impl Client {
         let port = Self::get_port().await.unwrap();
 
         let process = Command::new(cmd)
+            .current_dir(helix_stdx::env::current_working_dir()) // zeron: host keeps the process cwd
             .args(args)
             .args(port_format.replace("{}", &port.to_string()).split(' '))
             // silence messages

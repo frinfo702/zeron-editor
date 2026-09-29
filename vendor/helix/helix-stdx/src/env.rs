@@ -38,10 +38,30 @@ pub fn current_working_dir() -> PathBuf {
     cwd
 }
 
+// zeron: set by an embedding host that shares the process with other code.
+// Helix then tracks its cwd only in `CWD`, and every subprocess it spawns
+// passes it explicitly, instead of changing the process-wide directory.
+static HOST_OWNS_PROCESS_CWD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// zeron: see [`HOST_OWNS_PROCESS_CWD`].
+pub fn set_host_owns_process_cwd() {
+    HOST_OWNS_PROCESS_CWD.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Update the current working directory.
 pub fn set_current_working_dir(path: impl AsRef<Path>) -> std::io::Result<Option<PathBuf>> {
     let path = crate::path::canonicalize(path);
-    std::env::set_current_dir(&path)?;
+    if HOST_OWNS_PROCESS_CWD.load(std::sync::atomic::Ordering::Relaxed) {
+        if !path.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("not a directory: {}", path.display()),
+            ));
+        }
+    } else {
+        std::env::set_current_dir(&path)?;
+    }
     let mut cwd = CWD.write().unwrap();
 
     Ok(cwd.replace(path))

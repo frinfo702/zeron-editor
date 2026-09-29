@@ -6245,6 +6245,7 @@ async fn shell_impl_async(
 
     let mut process = Command::new(&shell[0]);
     process
+        .current_dir(helix_stdx::env::current_working_dir()) // zeron: host keeps the process cwd
         .args(&shell[1..])
         .arg(cmd)
         .stdout(Stdio::piped())

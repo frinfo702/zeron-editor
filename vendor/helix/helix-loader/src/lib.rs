@@ -15,6 +15,29 @@ static CONFIG_FILE: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCe
 
 static LOG_FILE: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCell::new();
 
+// zeron: an embedding host (Zeron's IDE mode) keeps Helix's config, runtime
+// and grammars in its own data directory instead of `~/.config/helix`.
+static HOST_DIRS: once_cell::sync::OnceCell<HostDirs> = once_cell::sync::OnceCell::new();
+
+struct HostDirs {
+    config: PathBuf,
+    cache: PathBuf,
+    runtime: Vec<PathBuf>,
+}
+
+/// zeron: Point Helix at a host-owned config dir, cache dir and extra runtime
+/// dirs (highest priority first, after `<config>/runtime`). Must run before
+/// anything resolves a Helix path; later calls are ignored.
+pub fn initialize_host_dirs(config: PathBuf, cache: PathBuf, runtime: Vec<PathBuf>) {
+    HOST_DIRS
+        .set(HostDirs {
+            config,
+            cache,
+            runtime,
+        })
+        .ok();
+}
+
 pub fn initialize_config_file(specified_file: Option<PathBuf>) {
     let config_file = specified_file.unwrap_or_else(default_config_file);
     ensure_parent_dir(&config_file);
@@ -42,6 +65,13 @@ fn prioritize_runtime_dirs() -> Vec<PathBuf> {
     const RT_DIR: &str = "runtime";
     // Adding higher priority first
     let mut rt_dirs = Vec::new();
+    // zeron: a host owns the runtime layout; `CARGO_MANIFEST_DIR` would point
+    // at the host crate, and `HELIX_RUNTIME` at an unrelated `hx` install.
+    if let Some(host) = HOST_DIRS.get() {
+        rt_dirs.push(host.config.join(RT_DIR));
+        rt_dirs.extend(host.runtime.iter().cloned());
+        return rt_dirs;
+    }
     if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
         // this is the directory of the crate being run by cargo, we need the workspace path so we take the parent
         let path = PathBuf::from(dir).parent().unwrap().join(RT_DIR);
@@ -117,6 +147,9 @@ pub fn runtime_file(rel_path: impl AsRef<Path>) -> PathBuf {
 }
 
 pub fn config_dir() -> PathBuf {
+    if let Some(host) = HOST_DIRS.get() {
+        return host.config.clone();
+    }
     // TODO: allow env var override
     let strategy = choose_base_strategy().expect("Unable to find the config directory!");
     let mut path = strategy.config_dir();
@@ -125,6 +158,9 @@ pub fn config_dir() -> PathBuf {
 }
 
 pub fn cache_dir() -> PathBuf {
+    if let Some(host) = HOST_DIRS.get() {
+        return host.cache.clone();
+    }
     // TODO: allow env var override
     let strategy = choose_base_strategy().expect("Unable to find the cache directory!");
     let mut path = strategy.cache_dir();

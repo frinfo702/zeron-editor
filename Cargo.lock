@@ -13820,13 +13820,19 @@ name = "zeron-ide"
 version = "0.2.98"
 dependencies = [
  "anyhow",
+ "gpui",
  "helix-core",
  "helix-event",
  "helix-loader",
  "helix-lsp",
+ "helix-stdx",
  "helix-term",
  "helix-tui",
  "helix-view",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tracing",
  "tree-sitter",
  "zeron-syntax",
 ]

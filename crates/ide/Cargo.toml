@@ -9,15 +9,21 @@ publish.workspace = true
 [dependencies]
 helix-core = { path = "../../vendor/helix/helix-core" }
 helix-view = { path = "../../vendor/helix/helix-view" }
-helix-term = { path = "../../vendor/helix/helix-term", default-features = false, features = ["git"] }
+helix-term = { path = "../../vendor/helix/helix-term", default-features = false, features = ["git", "headless"] }
 helix-loader = { path = "../../vendor/helix/helix-loader" }
 helix-lsp = { path = "../../vendor/helix/helix-lsp" }
 helix-event = { path = "../../vendor/helix/helix-event" }
+helix-stdx = { path = "../../vendor/helix/helix-stdx" }
 tui = { path = "../../vendor/helix/helix-tui", package = "helix-tui", default-features = false }
 anyhow.workspace = true
+gpui.workspace = true
+tokio.workspace = true
+tokio-stream = "0.1"
+tracing.workspace = true
 # Provides the tree-sitter C runtime for Helix (see .cargo/config.toml).
 # Pinned to zeron-syntax's version so the whole app links one runtime.
 tree-sitter = "=0.26.11"
 
 [dev-dependencies]
+tempfile.workspace = true
 zeron-syntax.workspace = true

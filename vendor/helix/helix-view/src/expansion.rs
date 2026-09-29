@@ -130,6 +130,7 @@ pub fn expand_shell<'a>(editor: &Editor, content: Cow<'a, str>) -> Result<Cow<'a
     let shell = &config.shell;
     let mut process = Command::new(&shell[0]);
     process
+        .current_dir(helix_stdx::env::current_working_dir()) // zeron: host keeps the process cwd
         .args(&shell[1..])
         .arg(content.as_ref())
         .stdin(Stdio::null())

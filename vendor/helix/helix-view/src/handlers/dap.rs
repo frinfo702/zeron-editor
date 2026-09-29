@@ -419,6 +419,7 @@ impl Editor {
                         };
 
                         let process = match std::process::Command::new(&config.command)
+                            .current_dir(helix_stdx::env::current_working_dir()) // zeron: host keeps the process cwd
                             .args(&config.args)
                             .arg(arguments.args.join(" "))
                             .spawn()

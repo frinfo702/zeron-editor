@@ -35,6 +35,8 @@ default = ["git"]
 unicode-lines = ["helix-core/unicode-lines", "helix-view/unicode-lines"]
 integration = ["helix-event/integration_test"]
 git = ["helix-vcs/git"]
+# zeron: render into memory for an embedding host (see application::headless).
+headless = []
 
 [[bin]]
 name = "hx"
