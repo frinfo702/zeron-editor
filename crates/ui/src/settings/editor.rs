@@ -182,7 +182,9 @@ impl Render for EditorSettingsPage {
         })
         .render(&self.line_numbers_select, cx);
 
+        // Inside `widgets::section`, which spaces the label and block itself.
         let editing = widgets::section_card(&theme)
+            .mt_0()
             .child(text_row(
                 &theme,
                 true,
@@ -276,6 +278,7 @@ impl Render for EditorSettingsPage {
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(EditorSettingsEvent::ReloadConfig))),
         );
         let configuration = widgets::section_card(&theme)
+            .mt_0()
             .child(config_row)
             .child(languages_row)
             .child(reload_row);
@@ -304,7 +307,7 @@ impl Render for EditorSettingsPage {
                 "Retry",
             ),
         };
-        let grammars = widgets::section_card(&theme).child(text_row(
+        let grammars = widgets::section_card(&theme).mt_0().child(text_row(
             &theme,
             true,
             "Syntax grammars",
@@ -343,11 +346,17 @@ impl Render for EditorSettingsPage {
                                     "IDE mode edits local folders with Helix. Values set in \
                                      Helix's own files override this page.",
                                 ))
-                                .child(editing)
-                                .child(widgets::section_label(&theme, "Configuration files"))
-                                .child(configuration)
-                                .child(widgets::section_label(&theme, "Syntax highlighting"))
-                                .child(grammars),
+                                .child(widgets::section(&theme, "Editing", editing))
+                                .child(widgets::section(
+                                    &theme,
+                                    "Configuration files",
+                                    configuration,
+                                ))
+                                .child(widgets::section(
+                                    &theme,
+                                    "Syntax highlighting",
+                                    grammars,
+                                )),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),
