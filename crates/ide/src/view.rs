@@ -110,6 +110,7 @@ impl HelixEditor {
             files,
             settings,
         } = options;
+        crate::fonts::ensure(cx);
         let workspace_dir = Arc::new(std::sync::Mutex::new(workspace.clone()));
         let (config, config_error) = load_config(&dirs, &workspace, &settings);
         let shared_settings = Arc::new(std::sync::Mutex::new(settings.clone()));
@@ -365,7 +366,7 @@ impl HelixEditor {
     fn cell_at(&self, position: Point<Pixels>) -> Option<(u16, u16)> {
         let g = self.geometry?;
         let col = ((position.x - g.origin.x) / g.cell_w).floor().max(0.0) as u16;
-        let row = ((position.y - g.origin.y) / g.line_h).floor().max(0.0) as u16;
+        let row = g.row_at(position.y - g.origin.y) as u16;
         Some((
             col.min(g.cols.saturating_sub(1)),
             row.min(g.rows.saturating_sub(1)),
@@ -806,7 +807,7 @@ impl Focusable for HelixEditor {
 
 impl Render for HelixEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
+        let theme = crate::fonts::ide_theme(Theme::of(cx));
         let banner = match (&self.status, &self.config_error) {
             (EditorStatus::Exited(Some(err)), _) => Some((err.clone(), theme.danger)),
             (EditorStatus::Exited(None), _) => Some(("Editor closed".into(), theme.text_muted)),
@@ -838,6 +839,7 @@ impl Render for HelixEditor {
             .id("helix-editor")
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
+            .font_family(crate::fonts::UI_FONT)
             .size_full()
             .relative()
             .overflow_hidden()
@@ -1066,7 +1068,16 @@ impl HelixEditor {
 
     /// The open-buffer tab strip: Zeron chrome over Helix's buffer list.
     /// Hidden while the only buffer is an untouched scratch buffer.
+    ///
+    /// Tabs are attached, like an editor's: each is a full-height cell with a
+    /// file icon, the name (plus its folder when two open files share a
+    /// name) and a close button. The active tab opens onto the editor (no
+    /// wash, no hairline under it) with an accent line on top; the others sit
+    /// on the strip's wash. The close button shows on the active and hovered
+    /// tab; an unsaved buffer shows a dot there until hovered.
     fn render_tabs(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        use zeron_ui::{file_icons, icons, theme as tokens};
+
         let buffers = &self.frame.as_ref()?.buffers;
         let only_scratch = buffers.len() == 1
             && buffers[0].path == helix_view::document::SCRATCH_BUFFER_NAME
@@ -1074,25 +1085,99 @@ impl HelixEditor {
         if buffers.is_empty() || only_scratch {
             return None;
         }
+        let strip_wash = tokens::ink(0.035);
+        let hairline = theme.border;
         let tabs = buffers.iter().enumerate().map(|(ix, tab)| {
             let id = tab.id;
-            let close_id = tab.id;
+            let active = tab.active;
+            let group: SharedString = format!("helix-tab-{ix}").into();
+            let hint = tab_hint(buffers, ix);
+            let icon = file_icons::icon(
+                file_icons::FileIconIdentity::file(&tab.name),
+                theme.appearance,
+            )
+            .size(px(14.0))
+            .when(!active, |icon| icon.opacity(0.7));
+            let close = div()
+                .id(("helix-tab-close", ix))
+                .flex_none()
+                .size(px(18.0))
+                .rounded(px(4.0))
+                .relative()
+                .hover(|el| el.bg(tokens::wash(0.12)))
+                .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.close_buffer(id);
+                }))
+                // Unsaved: a dot, swapped for the close icon on hover.
+                .when(tab.modified, |el| {
+                    el.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .group_hover(group.clone(), |s| s.opacity(0.0))
+                            .child(div().size(px(7.0)).rounded_full().bg(if active {
+                                theme.text_muted
+                            } else {
+                                theme.text_faint
+                            })),
+                    )
+                })
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(tab.modified || !active, |el| el.opacity(0.0))
+                        .group_hover(group.clone(), |s| s.opacity(1.0))
+                        .child(
+                            zeron_ui::icons::icon(icons::CLOSE)
+                                .size(px(14.0))
+                                .text_color(theme.text_muted),
+                        ),
+                );
             div()
                 .id(("helix-tab", ix))
-                .group("helix-tab")
-                .h(px(26.0))
+                .group(group.clone())
+                .relative()
+                .h_full()
                 .flex_none()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
-                .pl(px(10.0))
-                .pr(px(4.0))
-                .rounded(px(Theme::CONTROL_RADIUS))
-                .text_size(px(12.0))
+                .gap(px(7.0))
+                .pl(px(12.0))
+                .pr(px(6.0))
+                .border_r_1()
+                .border_color(hairline)
                 .cursor_pointer()
-                .text_color(if tab.active { theme.text } else { theme.text_muted })
-                .when(tab.active, |el| el.bg(theme.element_active))
-                .when(!tab.active, |el| el.hover(|el| el.bg(theme.element_hover)))
+                .text_size(px(12.5))
+                .when(active, |el| {
+                    el.text_color(theme.text).child(
+                        // Accent line along the top.
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(1.5))
+                            .bg(theme.accent),
+                    )
+                })
+                .when(!active, |el| {
+                    el.text_color(theme.text_muted)
+                        .bg(strip_wash)
+                        .border_b_1()
+                        .hover(|el| el.text_color(theme.text))
+                })
                 .tooltip(zeron_ui::settings::widgets::text_tooltip(tab.path.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     window.focus(&this.focus, cx);
@@ -1102,56 +1187,103 @@ impl HelixEditor {
                         });
                     }
                 }))
-                .child(tab.name.clone())
+                // Middle-click closes, like every tab strip.
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.close_buffer(id);
+                    }),
+                )
+                .child(icon)
                 .child(
                     div()
-                        .id(("helix-tab-close", ix))
-                        .size(px(16.0))
                         .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.0))
-                        .text_size(px(11.0))
-                        .text_color(theme.text_faint)
-                        .hover(|el| el.bg(theme.element_hover).text_color(theme.text))
-                        // The modified dot turns into the close button on hover.
-                        .child(if tab.modified { "●" } else { "×" })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            if let Some(host) = &this.host {
-                                host.call(move |app| {
-                                    if let Err(err) = app.editor.close_document(close_id, false) {
-                                        use helix_view::editor::CloseError;
-                                        let message = match err {
-                                            CloseError::BufferModified(name) => format!(
-                                                "{name} has unsaved changes (:w to save, :bc! to discard)"
-                                            ),
-                                            CloseError::SaveError(err) => format!("{err:#}"),
-                                            CloseError::DoesNotExist => return,
-                                        };
-                                        app.editor.set_error(message);
-                                    }
-                                });
-                            }
+                        .items_baseline()
+                        .gap(px(6.0))
+                        .whitespace_nowrap()
+                        .child(tab.name.clone())
+                        .children(hint.map(|hint| {
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(theme.text_faint)
+                                .child(hint)
                         })),
                 )
+                .child(close)
         });
         Some(
             div()
                 .id("helix-tabs")
                 .flex_none()
-                .h(px(34.0))
-                .px(px(PADDING))
+                .h(px(36.0))
                 .flex()
-                .items_center()
-                .gap(px(2.0))
                 .overflow_x_scroll()
-                .border_b_1()
-                .border_color(theme.border)
                 .children(tabs)
+                // The rest of the strip.
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(16.0))
+                        .h_full()
+                        .bg(strip_wash)
+                        .border_b_1()
+                        .border_color(hairline),
+                )
                 .into_any_element(),
         )
     }
+
+    /// Close a buffer from its tab; unsaved changes keep it open with a note.
+    fn close_buffer(&self, id: helix_view::DocumentId) {
+        let Some(host) = &self.host else { return };
+        host.call(move |app| {
+            if let Err(err) = app.editor.close_document(id, false) {
+                use helix_view::editor::CloseError;
+                let message = match err {
+                    CloseError::BufferModified(name) => {
+                        format!("{name} has unsaved changes (:w to save, :bc! to discard)")
+                    }
+                    CloseError::SaveError(err) => format!("{err:#}"),
+                    CloseError::DoesNotExist => return,
+                };
+                app.editor.set_error(message);
+            }
+        });
+    }
+}
+
+/// The folder shown beside a tab's name when another open buffer has the
+/// same name: the nearest parent directory that tells them apart.
+fn tab_hint(buffers: &[crate::host::BufferTab], ix: usize) -> Option<String> {
+    let tab = &buffers[ix];
+    let twins: Vec<&crate::host::BufferTab> = buffers
+        .iter()
+        .enumerate()
+        .filter(|&(other, b)| other != ix && b.name == tab.name)
+        .map(|(_, b)| b)
+        .collect();
+    if twins.is_empty() {
+        return None;
+    }
+    let dirs = |path: &str| -> Vec<String> {
+        let mut parts: Vec<String> = path.split('/').map(str::to_string).collect();
+        parts.pop();
+        parts
+    };
+    let own = dirs(&tab.path);
+    // The shortest trailing run of folders no twin shares.
+    for depth in 1..=own.len() {
+        let suffix = &own[own.len() - depth..];
+        let clash = twins.iter().any(|twin| {
+            let theirs = dirs(&twin.path);
+            theirs.len() >= depth && theirs[theirs.len() - depth..] == *suffix
+        });
+        if !clash {
+            return Some(suffix.join("/"));
+        }
+    }
+    own.last().cloned()
 }
 
 /// Paints the latest frame and measures the grid.
@@ -1201,7 +1333,7 @@ impl Element for HelixGrid {
         window: &mut Window,
         cx: &mut App,
     ) -> GridPaint {
-        let theme = Theme::of(cx).clone();
+        let theme = crate::fonts::ide_theme(Theme::of(cx));
         let mono = paint::grid_font(&theme);
         let font_size = px(theme.code_font_size);
         let font_id = window.text_system().resolve_font(&mono);
@@ -1214,12 +1346,10 @@ impl Element for HelixGrid {
         let inner_h = f32::from(bounds.size.height) - PADDING;
         let cols = ((inner_w / f32::from(cell_w)).floor() as i64).clamp(2, 1000) as u16;
         let rows = ((inner_h / f32::from(line_h)).floor() as i64).clamp(1, 1000) as u16;
-        // Bottom-aligned, so the statusline sits on the editor's bottom edge
-        // and the fractional-row remainder goes above the first line.
-        let origin = point(
-            bounds.left() + px(PADDING),
-            bounds.bottom() - line_h * rows as f32,
-        );
+        // The code starts under the top padding and the statusline sits on
+        // the bottom edge; the fractional-row remainder goes between them.
+        let origin = point(bounds.left() + px(PADDING), bounds.top() + px(PADDING));
+        let slack = (bounds.bottom() - origin.y - line_h * rows as f32).max(px(0.0));
         // The prompt holds the cursor on Helix's message line (row `rows`).
         let prompt = self
             .editor
@@ -1234,6 +1364,7 @@ impl Element for HelixGrid {
             cols,
             rows,
             prompt,
+            slack,
         };
         let (frame, focused, focus, marked, modeless) = self.editor.update(cx, |editor, _| {
             editor.on_geometry(geometry, bounds.origin);
@@ -1274,7 +1405,7 @@ impl Element for HelixGrid {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let theme = Theme::of(cx).clone();
+        let theme = crate::fonts::ide_theme(Theme::of(cx));
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
             paint.paint(&theme, window, cx);
         });
@@ -1289,6 +1420,39 @@ impl Element for HelixGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_named_tabs_show_the_folder_that_tells_them_apart() {
+        let tab = |path: &str| crate::host::BufferTab {
+            id: Default::default(),
+            name: path.rsplit('/').next().unwrap().into(),
+            path: path.into(),
+            modified: false,
+            active: false,
+        };
+        let buffers = vec![
+            tab("crates/ide/src/view.rs"),
+            tab("crates/ui/src/terminal/view.rs"),
+            tab("crates/ui/src/browser/view.rs"),
+            tab("vendor/a/src/lib.rs"),
+            tab("vendor/b/src/lib.rs"),
+            tab("README.md"),
+        ];
+        let hints: Vec<Option<String>> = (0..buffers.len())
+            .map(|ix| tab_hint(&buffers, ix))
+            .collect();
+        assert_eq!(
+            hints,
+            vec![
+                Some("src".into()),
+                Some("terminal".into()),
+                Some("browser".into()),
+                Some("a/src".into()),
+                Some("b/src".into()),
+                None,
+            ]
+        );
+    }
 
     #[test]
     fn signature_runs_mark_the_active_parameter() {

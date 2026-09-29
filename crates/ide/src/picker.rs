@@ -680,7 +680,12 @@ pub(crate) fn paint_prompt(
         let col = area.x + grid_col * (view.col_width + 1);
         let row = area.y + grid_row;
         let cell = g.helix_cell(col as usize, row as usize);
-        let y = cell.origin.y - lift;
+        let y = cell.origin.y
+            - if lift > px(0.0) {
+                lift + g.slack_above(row as usize)
+            } else {
+                lift
+            };
         let width = g.cell_w * view.col_width.max(1) as f32;
         let x = cell.origin.x + px(8.0);
         if view.selected == Some(ix) {

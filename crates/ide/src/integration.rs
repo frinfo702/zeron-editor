@@ -20,6 +20,7 @@ use crate::{
 /// Install Helix's directory layout under `data_dir` and make IDE mode
 /// available to the shell. Call once at boot, before any window opens.
 pub fn init(data_dir: &std::path::Path, cx: &mut App) {
+    crate::fonts::ensure(cx);
     let dirs = IdeDirs::for_data_dir(data_dir);
     dirs.install();
     seed_config_files(&dirs);

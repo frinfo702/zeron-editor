@@ -20,6 +20,8 @@ IDE mode embeds the Helix editor. Its sources are vendored unmodified except whe
 | Helix (helix-core, helix-view, helix-term, helix-lsp, helix-loader and related crates, runtime queries and themes) | 25.07.1 (`a05c151`) | MPL-2.0 | https://github.com/helix-editor/helix |
 | tree-house | 0.4.0 | MPL-2.0 | https://github.com/helix-editor/tree-house |
 
+IDE mode's interface text uses Inter 4.1 (Regular, Medium, SemiBold, Bold), copyright The Inter Project Authors, from https://github.com/rsms/inter, under the SIL Open Font License 1.1. The license is at `crates/ide/assets/fonts/Inter-OFL.txt`.
+
 Zeron also uses the following editor foundations from the pinned `zeronsh/gpui-component` fork. The fork aligns these crates with the same GPUI revision used by Comet.
 
 | Component | Version | License | Source |

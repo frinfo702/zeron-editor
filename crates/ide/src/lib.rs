@@ -14,6 +14,7 @@
 
 pub mod dirs;
 pub mod disk;
+pub mod fonts;
 pub mod host;
 pub mod integration;
 pub mod keymap;

@@ -45,6 +45,10 @@ pub(crate) struct Geometry {
     /// the statusline row, because Helix stacks the prompt's completions and
     /// help on the rows directly above its own line.
     pub prompt: bool,
+    /// The fractional-row remainder of the grid's height. It sits above the
+    /// statusline row, so the code starts right under the tabs and the
+    /// statusline on the editor's bottom edge.
+    pub slack: Pixels,
 }
 
 impl Geometry {
@@ -73,6 +77,29 @@ impl Geometry {
         }
     }
 
+    /// The slack above display row `row` (see [`Self::slack`]).
+    pub fn slack_above(&self, row: usize) -> Pixels {
+        if row + 1 >= self.rows as usize {
+            self.slack
+        } else {
+            px(0.0)
+        }
+    }
+
+    /// The display row under a y offset from the grid origin (the slack
+    /// counts as part of the row above it).
+    pub fn row_at(&self, y: Pixels) -> usize {
+        let last = self.rows.saturating_sub(1) as usize;
+        let above = self.line_h * last as f32;
+        if y < above {
+            (y / self.line_h).floor().max(0.0) as usize
+        } else if y < above + self.slack {
+            last.saturating_sub(1)
+        } else {
+            last
+        }
+    }
+
     /// A Helix cell's bounds where it paints (see [`Self::display_row`]).
     pub fn helix_cell(&self, col: usize, row: usize) -> Bounds<Pixels> {
         let mut cell = self.cell(col, self.display_row(row));
@@ -84,7 +111,7 @@ impl Geometry {
         Bounds::new(
             point(
                 self.origin.x + self.cell_w * col as f32,
-                self.origin.y + self.line_h * row as f32,
+                self.origin.y + self.line_h * row as f32 + self.slack_above(row),
             ),
             size(self.cell_w, self.line_h),
         )
@@ -445,8 +472,8 @@ fn split_region(rect: CellRect, member: impl Fn(usize, usize) -> bool) -> Vec<Ce
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     Rect,
-    /// Statusline mode badge.
-    Pill,
+    /// Statusline mode badge: a square block, like Vim's.
+    Badge,
     /// A menu or picker's selected row inside a card.
     Rounded,
 }
@@ -666,13 +693,19 @@ pub(crate) fn paint_frame(
             }
         })
         .collect();
-    let lift_of = |owner: Option<usize>| {
-        owner
+    // A lifted row on the statusline's row also sheds the slack above it.
+    let lift_at = |owner: Option<usize>, row: usize| {
+        let lift = owner
             .and_then(|card| lifts.get(card).copied())
-            .unwrap_or(px(0.0))
+            .unwrap_or(px(0.0));
+        if lift > px(0.0) {
+            lift + g.slack_above(row)
+        } else {
+            lift
+        }
     };
-    let lifted = |mut cell: Bounds<Pixels>, owner: Option<usize>| {
-        cell.origin.y -= lift_of(owner);
+    let lifted = |mut cell: Bounds<Pixels>, owner: Option<usize>, row: usize| {
+        cell.origin.y -= lift_at(owner, row);
         cell
     };
 
@@ -682,7 +715,12 @@ pub(crate) fn paint_frame(
         .zip(&framed)
         .enumerate()
         .map(|(ix, (rect, framed))| Card {
-            bounds: lifted(card_bounds(rect, *framed, g), Some(ix)),
+            bounds: {
+                let bounds = card_bounds(rect, *framed, g);
+                let top = bounds.origin.y - lift_at(Some(ix), rect.row0);
+                let bottom = bounds.bottom() - lift_at(Some(ix), rect.row1);
+                Bounds::from_corners(point(bounds.origin.x, top), point(bounds.right(), bottom))
+            },
             layer: Layer::default(),
             panes: Vec::new(),
         })
@@ -701,8 +739,9 @@ pub(crate) fn paint_frame(
     });
 
     for row in (0..rows).chain(message_row) {
+        let lift_of = |owner: Option<usize>| lift_at(owner, row);
         let at = g.display_row(row);
-        let y = g.origin.y + g.line_h * at as f32;
+        let y = g.cell(0, at).origin.y;
         let x0 = g.origin.x + g.row_inset(row);
         let paints: Vec<CellPaint> = (0..cols)
             .map(|col| {
@@ -765,7 +804,7 @@ pub(crate) fn paint_frame(
         for col in 0..=cols {
             let next = paints.get(col).and_then(|paint| {
                 let shape = match paint.bg_token {
-                    Some(token) if token.is_badge() => Shape::Pill,
+                    Some(token) if token.is_badge() => Shape::Badge,
                     Some(Token::MenuSelected) if owners[col].is_some() => Shape::Rounded,
                     _ => Shape::Rect,
                 };
@@ -780,34 +819,32 @@ pub(crate) fn paint_frame(
                             point(x0 + g.cell_w * start as f32, y - lift_of(owner)),
                             size(g.cell_w * (col - start) as f32, g.line_h),
                         );
-                        let quad = if shape != Shape::Rect {
-                            // Mode badge: a pill inset from the row; a
-                            // menu's selected row: a rounded highlight.
-                            let inset = match shape {
-                                Shape::Pill => (g.line_h * 0.18).round(),
-                                _ => px(1.0),
-                            };
-                            let pill = Bounds::from_corners(
-                                point(cells.origin.x, cells.origin.y + inset),
-                                point(
-                                    cells.origin.x + cells.size.width,
-                                    cells.origin.y + cells.size.height - inset,
+                        let quad = match shape {
+                            // Mode badge: the full row under the statusline's
+                            // hairline, square-cornered.
+                            Shape::Badge => fill(
+                                Bounds::from_corners(
+                                    point(cells.origin.x, cells.origin.y + px(1.0)),
+                                    cells.bottom_right(),
                                 ),
-                            );
-                            let radius = match shape {
-                                Shape::Pill => pill.size.height / 2.0,
-                                _ => px(Theme::CONTROL_RADIUS),
-                            };
-                            quad(
-                                pill,
-                                Corners::all(radius),
+                                color,
+                            ),
+                            // A menu's selected row: a rounded highlight.
+                            Shape::Rounded => quad(
+                                Bounds::from_corners(
+                                    point(cells.origin.x, cells.origin.y + px(1.0)),
+                                    point(
+                                        cells.origin.x + cells.size.width,
+                                        cells.origin.y + cells.size.height - px(1.0),
+                                    ),
+                                ),
+                                Corners::all(px(Theme::CONTROL_RADIUS)),
                                 color,
                                 px(0.0),
                                 color,
                                 BorderStyle::Solid,
-                            )
-                        } else {
-                            fill(cells, color)
+                            ),
+                            Shape::Rect => fill(cells, color),
                         };
                         match owner {
                             Some(card) => cards[card].layer.quads.push(quad),
@@ -898,7 +935,7 @@ pub(crate) fn paint_frame(
                 match owner {
                     Some(card) => push_rules(
                         &mut cards[card].layer.rules,
-                        lifted(g.helix_cell(col, row), Some(card)),
+                        lifted(g.helix_cell(col, row), Some(card), row),
                         arms,
                         color,
                     ),
@@ -995,7 +1032,8 @@ pub(crate) fn paint_frame(
         let area = prompt.area;
         if let Some(card) = card_of(area.x as usize, area.y as usize) {
             let mut pane = Layer::default();
-            crate::picker::paint_prompt(prompt, g, theme, window, lifts[card], &mut pane);
+            let lift = lifts[card];
+            crate::picker::paint_prompt(prompt, g, theme, window, lift, &mut pane);
             let clip = cards[card].bounds;
             cards[card].panes.push((clip, pane));
         }
@@ -1117,6 +1155,24 @@ pub(crate) fn grid_font(theme: &Theme) -> gpui::Font {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_slack_sits_above_the_statusline_row() {
+        let g = Geometry {
+            origin: point(px(0.0), px(0.0)),
+            cell_w: px(8.0),
+            line_h: px(20.0),
+            cols: 10,
+            rows: 5,
+            prompt: false,
+            slack: px(7.0),
+        };
+        assert_eq!(g.cell(0, 3).origin.y, px(60.0));
+        assert_eq!(g.cell(0, 4).origin.y, px(87.0));
+        assert_eq!(g.row_at(px(79.0)), 3);
+        assert_eq!(g.row_at(px(83.0)), 3);
+        assert_eq!(g.row_at(px(88.0)), 4);
+    }
 
     fn grid(rows: &[&str]) -> (usize, usize, Vec<bool>) {
         let cols = rows[0].len();

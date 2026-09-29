@@ -81,9 +81,18 @@ that runs on another device shows an explanation instead of an editor.
 - **Touching layers.** A region of overlay cells that is not a rectangle
   (completion menu beside its docs, a help box on a wider list) splits into
   rectangles, and a reported menu is always its own card.
-- **Tabs and the command line.** Open buffers show as a Zeron tab strip
-  above the grid. Helix's message / command line row is hidden and floats
-  as a card above the statusline while in use.
+- **Tabs and the command line.** Open buffers show as attached tabs above
+  the grid: file icon, name (and the folder that tells two same-named files
+  apart), and Zeron's close icon, shown on the active and hovered tab (an
+  unsaved buffer shows a dot until hovered). The active tab opens onto the
+  editor with an accent line on top. Middle-click closes. Helix's message /
+  command line row is hidden and floats as a card above the statusline
+  while in use.
+- **Fonts.** The editor's chrome (tabs, pickers, menus, docs) is set in
+  Inter, bundled in `crates/ide/assets/fonts` (`fonts.rs`); code stays in
+  the theme's code font. The grid starts right under the tabs and the
+  statusline sits on the bottom edge; the fractional-row remainder goes
+  above the statusline. The mode badge is a square block, as in Vim.
 - **Edits made on disk.** Helix does not watch files, so the view checks
   open buffers every 1.5s (`disk.rs`): a buffer without unsaved changes
   reloads when an agent (or anything else) rewrites its file; one with
