@@ -458,6 +458,11 @@ impl Completion {
 }
 
 impl Component for Completion {
+    // zeron: the completion list, for a host drawing it natively.
+    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
+        self.popup.host_view()
+    }
+
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
         self.popup.handle_event(event, cx)
     }

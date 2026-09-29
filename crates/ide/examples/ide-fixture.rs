@@ -106,7 +106,11 @@ fn main() -> anyhow::Result<()> {
                     },
                 )
                 .unwrap();
-            cx.activate(true);
+            // A scripted tour renders offscreen; stealing focus would feed it
+            // whatever the user is typing in another app.
+            if std::env::var_os("ZERON_IDE_SHOTS").is_none() {
+                cx.activate(true);
+            }
             tour::run_from_env(window.into(), cx);
         });
     Ok(())

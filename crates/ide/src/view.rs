@@ -397,6 +397,12 @@ impl HelixEditor {
         crate::picker::hit(&view, cell).map(|hit| (view, hit))
     }
 
+    fn menu_hit(&self, position: Point<Pixels>) -> Option<(crate::host::MenuView, Option<usize>)> {
+        let menu = self.frame.as_ref()?.menu.clone()?;
+        let cell = self.cell_at(position)?;
+        crate::picker::menu_hit(&menu, cell).map(|row| (menu, row))
+    }
+
     fn send_keys<'a>(&self, keys: impl IntoIterator<Item = &'a str>) {
         for key in keys {
             if let Ok(key) = key.parse() {
@@ -417,6 +423,14 @@ impl HelixEditor {
         if let Some((view, hit)) = self.picker_hit(event.position) {
             if let (crate::picker::Hit::Row(index), MouseButton::Left) = (hit, event.button) {
                 self.send_keys(crate::picker::keys_to_select(&view, index));
+                self.send_keys(["ret"]);
+            }
+            return;
+        }
+        // Likewise a completion (or other) menu row.
+        if let Some((menu, row)) = self.menu_hit(event.position) {
+            if let (Some(index), MouseButton::Left) = (row, event.button) {
+                self.send_keys(crate::picker::menu_keys_to_select(&menu, index));
                 self.send_keys(["ret"]);
             }
             return;

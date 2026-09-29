@@ -19,7 +19,7 @@ use helix_view::graphics::{Modifier, Rect};
 use zeron_ui::theme::Theme;
 
 use crate::{
-    host::PickerView,
+    host::{MenuView, PickerView},
     paint::{Geometry, Layer},
     theme,
 };
@@ -172,7 +172,13 @@ fn split_path(path: &str) -> (&str, &str) {
 }
 
 /// Paint the list pane of `view` into `layer` (the picker card's layer).
-pub fn paint(view: &PickerView, g: &Geometry, theme: &Theme, window: &Window, layer: &mut Layer) {
+pub(crate) fn paint(
+    view: &PickerView,
+    g: &Geometry,
+    theme: &Theme,
+    window: &Window,
+    layer: &mut Layer,
+) {
     let inner = inner(view);
     if inner.width == 0 || inner.height < 3 {
         return;
@@ -346,6 +352,147 @@ pub fn paint(view: &PickerView, g: &Geometry, theme: &Theme, window: &Window, la
     }
 }
 
+// ---------------------------------------------------------------------------
+// Menus (completion, code actions, …)
+// ---------------------------------------------------------------------------
+
+/// Which menu row, if any, `cell` is on.
+pub fn menu_hit(view: &MenuView, (col, row): (u16, u16)) -> Option<Option<usize>> {
+    let area = view.area;
+    let inside =
+        col >= area.x && col < area.x + area.width && row >= area.y && row < area.y + area.height;
+    inside.then(|| {
+        let index = (row - area.y) as usize;
+        (index < view.rows.len()).then_some(index)
+    })
+}
+
+/// Keys that move a menu's selection to row `index` (no selection yet
+/// starts before the first row).
+pub fn menu_keys_to_select(view: &MenuView, index: usize) -> Vec<&'static str> {
+    match view.selected {
+        Some(selected) if index >= selected => vec!["down"; index - selected],
+        Some(selected) => vec!["up"; selected - index],
+        None => vec!["down"; index + 1],
+    }
+}
+
+/// Paint a menu natively: the first cell (a completion's label) in the
+/// code font, the rest (kind, detail) muted in the UI font, a rounded
+/// selection, and a thin scrollbar when the list runs past the menu.
+pub(crate) fn paint_menu(
+    view: &MenuView,
+    g: &Geometry,
+    theme: &Theme,
+    window: &Window,
+    layer: &mut Layer,
+) {
+    let area = view.area;
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let ui = Painter {
+        g,
+        theme,
+        window,
+        font: gpui::font(theme.font_sans.clone()),
+    };
+    let code = Painter {
+        g,
+        theme,
+        window,
+        font: crate::paint::grid_font(theme),
+    };
+    let first = g.helix_cell(area.x as usize, area.y as usize);
+    let last = g.helix_cell((area.x + area.width - 1) as usize, area.y as usize);
+    let (left, right) = (
+        first.origin.x + px(PAD_X / 2.0),
+        last.origin.x + g.cell_w - px(PAD_X / 2.0),
+    );
+    let rows: Vec<Vec<(String, BTreeSet<usize>)>> = view
+        .rows
+        .iter()
+        .map(|cells| cells.iter().map(|cell| cell_text(cell)).collect())
+        .collect();
+    // Measured start of the second column: after the widest label.
+    let label_width = rows
+        .iter()
+        .filter_map(|cells| cells.first())
+        .map(|(text, _)| {
+            let run = code.run(text.len(), theme.text, FontWeight::NORMAL);
+            code.shape(text, &[run]).width
+        })
+        .fold(px(0.0), |a, b| a.max(b));
+    let detail_x = left + px(6.0) + label_width + px(COLUMN_GAP / 2.0);
+
+    for (index, cells) in rows.iter().enumerate() {
+        let row = area.y + index as u16;
+        let origin_y = g.helix_cell(0, row as usize).origin.y;
+        if view.selected == Some(index) {
+            layer.quads.push(quad(
+                Bounds::from_corners(
+                    point(first.origin.x + px(3.0), origin_y + px(1.0)),
+                    point(
+                        last.origin.x + g.cell_w - px(3.0),
+                        origin_y + g.line_h - px(1.0),
+                    ),
+                ),
+                Corners::all(px(Theme::CONTROL_RADIUS)),
+                theme.element_active,
+                px(0.0),
+                theme.element_active,
+                gpui::BorderStyle::Solid,
+            ));
+        }
+        let mut cells = cells.iter();
+        if let Some((label, highlights)) = cells.next() {
+            let color = if view.selected == Some(index) {
+                theme.text
+            } else {
+                theme.text.opacity(0.92)
+            };
+            layer.lines.push((
+                point(left + px(6.0), origin_y),
+                code.highlighted(label, color, highlights, 0),
+            ));
+        }
+        let detail: Vec<&str> = cells
+            .map(|(text, _)| text.trim())
+            .filter(|text| !text.is_empty())
+            .collect();
+        if !detail.is_empty() {
+            let text = detail.join("  ");
+            let run = ui.run(text.len(), theme.text_faint, FontWeight::NORMAL);
+            let line = ui.shape(&text, &[run]);
+            // Right-aligned when it fits after the labels, else after them.
+            let x = (right - px(8.0) - line.width).max(detail_x);
+            layer.lines.push((point(x, origin_y), line));
+        }
+    }
+
+    // Scrollbar.
+    let visible = area.height as usize;
+    if view.total > visible {
+        let track_top = first.origin.y;
+        let track_h = g.line_h * visible as f32;
+        let thumb_h = (track_h * (visible as f32 / view.total as f32)).max(px(16.0));
+        let travel = track_h - thumb_h;
+        let max_scroll = (view.total - visible).max(1) as f32;
+        let thumb_top = track_top + travel * (view.scroll as f32 / max_scroll).min(1.0);
+        layer.rules.push(quad(
+            Bounds::new(
+                point(last.origin.x + g.cell_w - px(5.0), thumb_top + px(2.0)),
+                size(px(3.0), thumb_h - px(4.0)),
+            ),
+            Corners::all(px(1.5)),
+            theme.text_faint.opacity(0.6),
+            px(0.0),
+            theme.text_faint,
+            gpui::BorderStyle::Solid,
+        ));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +516,25 @@ mod tests {
         assert_eq!(hit(&v, (12, 11)), Some(Hit::Pane));
         assert_eq!(hit(&v, (12, 6)), Some(Hit::Pane));
         assert_eq!(hit(&v, (5, 8)), None);
+    }
+
+    #[test]
+    fn menu_rows_hit_and_select() {
+        let menu = MenuView {
+            area: Rect::new(4, 10, 20, 3),
+            rows: vec![Vec::new(); 3],
+            selected: Some(0),
+            total: 9,
+            scroll: 0,
+        };
+        assert_eq!(menu_hit(&menu, (5, 12)), Some(Some(2)));
+        assert_eq!(menu_hit(&menu, (5, 13)), None);
+        assert_eq!(menu_keys_to_select(&menu, 2), vec!["down", "down"]);
+        let fresh = MenuView {
+            selected: None,
+            ..menu
+        };
+        assert_eq!(menu_keys_to_select(&fresh, 1), vec!["down", "down"]);
     }
 
     #[test]

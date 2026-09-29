@@ -33,7 +33,21 @@ pub struct PickerView {
     pub files: bool,
 }
 
+/// A menu (completion, code actions…) as it last rendered.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MenuView {
+    pub area: Rect,
+    /// The rows on screen, cells of spans (as [`PickerView::rows`]).
+    pub rows: Vec<Vec<Vec<HostSpan>>>,
+    /// Which of `rows` is selected, if any.
+    pub selected: Option<usize>,
+    /// All matching options, and the first one on screen.
+    pub total: usize,
+    pub scroll: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostView {
     Picker(PickerView),
+    Menu(MenuView),
 }

@@ -250,6 +250,11 @@ impl<T: Component> Popup<T> {
 }
 
 impl<T: Component> Component for Popup<T> {
+    // zeron: a popup reports what it holds (a menu, …) to a host.
+    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
+        self.contents.host_view()
+    }
+
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
         let key = match event {
             Event::Key(event) => *event,

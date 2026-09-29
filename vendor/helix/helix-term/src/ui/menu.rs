@@ -35,6 +35,8 @@ pub struct Menu<T: Item> {
     size: (u16, u16),
     viewport: (u16, u16),
     recalculate: bool,
+    /// zeron: the last render, for a host drawing the menu natively.
+    host_view: crate::ui::host_view::MenuView,
 }
 
 impl<T: Item> Menu<T> {
@@ -59,6 +61,7 @@ impl<T: Item> Menu<T> {
             size: (0, 0),
             viewport: (0, 0),
             recalculate: true,
+            host_view: Default::default(),
         }
     }
 
@@ -207,6 +210,11 @@ impl<T: Item + PartialEq> Menu<T> {
 use super::PromptEvent as MenuEvent;
 
 impl<T: Item + 'static> Component for Menu<T> {
+    // zeron: see ui/host_view.rs.
+    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
+        Some(crate::ui::host_view::HostView::Menu(self.host_view.clone()))
+    }
+
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
         let event = match event {
             Event::Key(event) => *event,
@@ -311,6 +319,41 @@ impl<T: Item + 'static> Component for Menu<T> {
         let len = options.len();
 
         let win_height = area.height as usize;
+
+        // zeron: publish the rows on screen for a host.
+        self.host_view = crate::ui::host_view::MenuView {
+            area,
+            rows: options
+                .iter()
+                .skip(scroll)
+                .take(win_height)
+                .map(|option| {
+                    option
+                        .format(&self.editor_data)
+                        .cells
+                        .iter()
+                        .map(|cell| {
+                            cell.content
+                                .lines
+                                .first()
+                                .map(|line| {
+                                    line.0
+                                        .iter()
+                                        .map(|span| (span.content.to_string(), span.style))
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        })
+                        .collect()
+                })
+                .collect(),
+            selected: self
+                .cursor
+                .and_then(|cursor| cursor.checked_sub(scroll))
+                .filter(|&row| row < win_height),
+            total: len,
+            scroll,
+        };
 
         let rows = options
             .iter()

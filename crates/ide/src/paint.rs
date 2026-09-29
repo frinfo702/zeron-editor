@@ -324,6 +324,7 @@ pub(crate) fn find_cards(
             row1: start / cols,
         };
         let mut stack = vec![start];
+        let mut members = vec![start];
         seen[start] = true;
         while let Some(ix) = stack.pop() {
             let (col, row) = (ix % cols, ix / cols);
@@ -336,6 +337,7 @@ pub(crate) fn find_cards(
                 if !seen[next] && overlay(c, r) {
                     seen[next] = true;
                     stack.push(next);
+                    members.push(next);
                 }
             };
             if col > 0 {
@@ -351,12 +353,88 @@ pub(crate) fn find_cards(
                 visit(col, row + 1);
             }
         }
-        // A lone cell or thin sliver is not a card (e.g. a stray menu tint).
-        if rect.col1 > rect.col0 && rect.row1 >= rect.row0 {
-            cards.push(rect);
+        let mut member = vec![false; cols * rows];
+        for ix in members {
+            member[ix] = true;
+        }
+        let is_member = |c: usize, r: usize| member[r * cols + c];
+        // Touching layers (a completion menu beside its docs, a help box on
+        // a list) make an L-shaped region; split it into rectangles so the
+        // cards never cover editor text in the notch.
+        for rect in split_region(rect, is_member) {
+            // A lone cell or thin sliver is not a card (e.g. a stray tint).
+            if rect.col1 > rect.col0 {
+                cards.push(rect);
+            }
         }
     }
     cards
+}
+
+/// Split a connected region (bounded by `rect`) into rectangles: runs of
+/// rows sharing one horizontal extent, or runs of columns sharing one
+/// vertical extent — whichever gives fewer pieces and no one-cell slivers,
+/// rows on a tie.
+fn split_region(rect: CellRect, member: impl Fn(usize, usize) -> bool) -> Vec<CellRect> {
+    let strips = |rows_first: bool| -> Vec<CellRect> {
+        let (outer, inner) = if rows_first {
+            (rect.row0..=rect.row1, rect.col0..=rect.col1)
+        } else {
+            (rect.col0..=rect.col1, rect.row0..=rect.row1)
+        };
+        let at = |o: usize, i: usize| {
+            if rows_first {
+                member(i, o)
+            } else {
+                member(o, i)
+            }
+        };
+        let mut pieces: Vec<(usize, usize, usize, usize)> = Vec::new(); // (o0, o1, i0, i1)
+        for o in outer {
+            let mut hits = inner.clone().filter(|&i| at(o, i));
+            let Some(i0) = hits.next() else { continue };
+            let i1 = hits.last().unwrap_or(i0);
+            match pieces.last_mut() {
+                Some(last) if last.1 + 1 == o && last.2 == i0 && last.3 == i1 => last.1 = o,
+                _ => pieces.push((o, o, i0, i1)),
+            }
+        }
+        pieces
+            .into_iter()
+            .map(|(o0, o1, i0, i1)| {
+                if rows_first {
+                    CellRect {
+                        col0: i0,
+                        row0: o0,
+                        col1: i1,
+                        row1: o1,
+                    }
+                } else {
+                    CellRect {
+                        col0: o0,
+                        row0: i0,
+                        col1: o1,
+                        row1: i1,
+                    }
+                }
+            })
+            .collect()
+    };
+    let thinnest = |pieces: &[CellRect]| {
+        pieces
+            .iter()
+            .map(|r| (r.col1 - r.col0).min(r.row1 - r.row0) + 1)
+            .min()
+            .unwrap_or(0)
+    };
+    let by_rows = strips(true);
+    if by_rows.len() == 1 {
+        return by_rows;
+    }
+    let by_cols = strips(false);
+    let rows_better = (by_rows.len(), usize::MAX - thinnest(&by_rows))
+        <= (by_cols.len(), usize::MAX - thinnest(&by_cols));
+    if rows_better { by_rows } else { by_cols }
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +578,7 @@ pub(crate) fn paint_frame(
     let rows = (buffer.area.height as usize).min(g.rows as usize);
     let cell_at = |col: usize, row: usize| &buffer.content[row * width + col];
     let native_picker = frame.picker.as_ref().map(crate::picker::inner);
+    let native_menu = frame.menu.as_ref().map(|menu| menu.area);
     let contains = |rect: helix_view::graphics::Rect, col: usize, row: usize| {
         (rect.x as usize..(rect.x + rect.width) as usize).contains(&col)
             && (rect.y as usize..(rect.y + rect.height) as usize).contains(&row)
@@ -513,9 +592,27 @@ pub(crate) fn paint_frame(
                 || (0..cols).any(|col| !cell_at(col, row).symbol.trim().is_empty())
         });
 
-    let rects = find_cards(cols, rows, |col, row| {
-        Token::of(cell_at(col, row).bg).is_some_and(Token::is_overlay)
+    let is_overlay =
+        |col: usize, row: usize| Token::of(cell_at(col, row).bg).is_some_and(Token::is_overlay);
+    // A menu Helix reported is a card of its own, exactly where Helix put it,
+    // so a popup beside it (completion docs) cannot merge into one shape.
+    let known: Vec<CellRect> = frame
+        .menu
+        .iter()
+        .map(|menu| menu.area)
+        .filter(|area| area.width > 0 && area.height > 0)
+        .map(|area| CellRect {
+            col0: area.x as usize,
+            row0: area.y as usize,
+            col1: (area.x + area.width - 1) as usize,
+            row1: (area.y + area.height - 1) as usize,
+        })
+        .filter(|rect| rect.col1 < cols && rect.row1 < rows)
+        .collect();
+    let mut rects = find_cards(cols, rows, |col, row| {
+        is_overlay(col, row) && !known.iter().any(|rect| rect.contains(col, row))
     });
+    rects.extend(known);
     let framed: Vec<Framed> = rects
         .iter()
         .map(|rect| Framed::of(rect, |col, row| box_arms(&cell_at(col, row).symbol)))
@@ -578,7 +675,9 @@ pub(crate) fn paint_frame(
             .map(|col| {
                 let mut paint = resolve_cell(cell_at(col, row), theme);
                 // The picker's list pane is drawn natively (picker.rs).
-                if native_picker.is_some_and(|inner| contains(inner, col, row)) {
+                if native_picker.is_some_and(|inner| contains(inner, col, row))
+                    || native_menu.is_some_and(|area| contains(area, col, row))
+                {
                     paint.bg = None;
                     paint.hidden = true;
                 }
@@ -840,6 +939,21 @@ pub(crate) fn paint_frame(
         }
     }
 
+    if let Some(menu) = &frame.menu {
+        let area = menu.area;
+        if let Some(card) = card_of(area.x as usize, area.y as usize) {
+            let mut pane = Layer::default();
+            crate::picker::paint_menu(menu, g, theme, window, &mut pane);
+            let first = g.helix_cell(area.x as usize, area.y as usize);
+            let last = g.helix_cell(
+                (area.x + area.width).saturating_sub(1) as usize,
+                (area.y + area.height).saturating_sub(1) as usize,
+            );
+            let clip = Bounds::from_corners(first.origin, last.origin + point(g.cell_w, g.line_h));
+            cards[card].panes.push((clip, pane));
+        }
+    }
+
     // Helix draws block cursors into the grid itself; a bar or underline
     // cursor is the "terminal" cursor, painted here. Inside a native picker
     // the list draws its own caret.
@@ -964,6 +1078,50 @@ mod tests {
                     col0: 7,
                     row0: 2,
                     col1: 8,
+                    row1: 3
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn l_shaped_regions_split_into_rectangles() {
+        // A completion menu (left, taller) beside its docs (right).
+        let (cols, rows, cells) = grid(&[".##########.", ".##########.", ".###........"]);
+        let cards = find_cards(cols, rows, |c, r| cells[r * cols + c]);
+        assert_eq!(
+            cards,
+            vec![
+                CellRect {
+                    col0: 1,
+                    row0: 0,
+                    col1: 3,
+                    row1: 2
+                },
+                CellRect {
+                    col0: 4,
+                    row0: 0,
+                    col1: 10,
+                    row1: 1
+                },
+            ]
+        );
+        // A help box resting on a wider list splits into rows.
+        let (cols, rows, cells) = grid(&["#####.....", "#####.....", "##########", "##########"]);
+        let cards = find_cards(cols, rows, |c, r| cells[r * cols + c]);
+        assert_eq!(
+            cards,
+            vec![
+                CellRect {
+                    col0: 0,
+                    row0: 0,
+                    col1: 4,
+                    row1: 1
+                },
+                CellRect {
+                    col0: 0,
+                    row0: 2,
+                    col1: 9,
                     row1: 3
                 },
             ]

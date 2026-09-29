@@ -52,6 +52,14 @@ that runs on another device shows an explanation instead of an editor.
   it with the UI font: a search field, `name  dir/` file rows, measured
   columns for tables, a rounded selection. Keys still go to Helix; clicks
   and the wheel become arrow keys and Enter.
+- **Native menus.** Completion (and other) menus record the same way
+  (`MenuView`; the editor view reports its completion, which is not a
+  layer). They paint as a card of their own: labels in the code font, kind /
+  detail muted, a rounded selection and a thin scrollbar. Clicks select and
+  accept a row.
+- **Touching layers.** A region of overlay cells that is not a rectangle
+  (completion menu beside its docs, a help box on a wider list) splits into
+  rectangles, and a reported menu is always its own card.
 - **Tabs and the command line.** Open buffers show as a Zeron tab strip
   above the grid. Helix's message / command line row is hidden and floats
   as a card above the statusline while in use.
@@ -130,10 +138,11 @@ borrows compiled grammars from an existing Helix install.
 
 ## Not done yet
 
-- **Popups, menus and the command line are restyled, not rebuilt.** They
-  render as Zeron cards with Helix's cell layout inside. Pickers are native
-  (below); the same `host_view` hook in `helix-term` is how the rest would
-  follow. The picker preview pane is still Helix's grid.
+- **Hover / signature / completion docs, the info box and the command line
+  are restyled, not rebuilt.** They render as Zeron cards with Helix's cell
+  layout inside. Pickers and menus are native (below); the same
+  `host_view` hook in `helix-term` is how the rest would follow. The picker
+  preview pane is still Helix's grid.
 - **Off macOS, most Ctrl chords go to the editor** while it has focus, so
   Zeron's other `Mod` shortcuts (Ctrl there) are shadowed. The Agent/IDE
   switch and the sidebar, terminal, files and changes toggles always pass

@@ -48,3 +48,6 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
   records it while rendering (query, counts, visible rows with match
   highlights, pane areas); `Overlay` forwards it; `Compositor::host_views`
   collects them.
+- `Menu` records a `MenuView` while rendering; `Popup`, `Completion` and
+  `EditorView` (which owns the completion, outside the layer stack) forward
+  it.
