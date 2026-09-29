@@ -28,6 +28,8 @@ use crate::{
 const TEXT_SIZE: f32 = 13.0;
 /// UI text size for picker rows and the search field.
 const LIST_TEXT_SIZE: f32 = 14.0;
+/// Line height of the search field's text, as a multiple of its size.
+const INPUT_LINE_HEIGHT: f32 = 1.5;
 /// Grid rows per picker item: items are taller than a code line, like a
 /// native list. Helix lays the list out with the same scale.
 pub const ROW_SCALE: f32 = 1.5;
@@ -383,10 +385,20 @@ pub(crate) fn paint(
         let run = p.run(prefix.len(), theme.text, FontWeight::NORMAL);
         left + p.shape(prefix, &[run]).width
     };
+    // Sized like Zeron's text inputs (gpui-component): 0.85 of the text's
+    // line height, 1.5px wide on macOS and 2px elsewhere, snapped to device
+    // pixels, centred on the text.
+    let caret_w = if cfg!(target_os = "macos") {
+        px(1.5)
+    } else {
+        px(2.0)
+    };
+    let caret_h = window.pixel_snap(px(LIST_TEXT_SIZE * INPUT_LINE_HEIGHT * 0.85));
+    let caret_y = window.pixel_snap(text_y + (g.line_h - caret_h) / 2.0);
     layer.quads.push(fill(
         Bounds::new(
-            point(caret_x, text_y + g.line_h * 0.15),
-            size(px(1.5), g.line_h * 0.7),
+            point(caret_x, caret_y),
+            size(window.pixel_snap(caret_w), caret_h),
         ),
         theme.caret,
     ));
