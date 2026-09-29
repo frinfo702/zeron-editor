@@ -323,7 +323,8 @@ impl HelixEditor {
 
     fn on_geometry(&mut self, geometry: Geometry) {
         self.geometry = Some(geometry);
-        let grid = (geometry.cols, geometry.rows);
+        // One row more than fits: Helix's message line, drawn only on demand.
+        let grid = (geometry.cols, geometry.rows + 1);
         if self.sent_grid != Some(grid) {
             self.sent_grid = Some(grid);
             self.send(Event::Resize(grid.0, grid.1));
@@ -539,13 +540,7 @@ impl EntityInputHandler for HelixEditor {
         // Candidate windows anchor under the cursor cell.
         let g = self.geometry?;
         let (col, row) = self.frame.as_ref()?.cursor?;
-        Some(Bounds::new(
-            point(
-                g.origin.x + g.cell_w * col as f32,
-                g.origin.y + g.line_h * row as f32,
-            ),
-            size(g.cell_w, g.line_h),
-        ))
+        Some(g.helix_cell(col as usize, row as usize))
     }
 
     fn character_index_for_point(
@@ -696,15 +691,22 @@ impl Element for HelixGrid {
             .em_advance(font_id, font_size)
             .unwrap_or(px(theme.code_font_size * 0.6));
         let line_h = px((theme.code_font_size * LINE_HEIGHT).round());
-        let origin = point(bounds.left() + px(PADDING), bounds.top() + px(PADDING));
         let inner_w = f32::from(bounds.size.width) - 2.0 * PADDING;
-        let inner_h = f32::from(bounds.size.height) - 2.0 * PADDING;
+        let inner_h = f32::from(bounds.size.height) - PADDING;
+        let cols = ((inner_w / f32::from(cell_w)).floor() as i64).clamp(2, 1000) as u16;
+        let rows = ((inner_h / f32::from(line_h)).floor() as i64).clamp(1, 1000) as u16;
+        // Bottom-aligned, so the statusline sits on the editor's bottom edge
+        // and the fractional-row remainder goes above the first line.
+        let origin = point(
+            bounds.left() + px(PADDING),
+            bounds.bottom() - line_h * rows as f32,
+        );
         let geometry = Geometry {
             origin,
             cell_w,
             line_h,
-            cols: ((inner_w / f32::from(cell_w)).floor() as i64).clamp(2, 1000) as u16,
-            rows: ((inner_h / f32::from(line_h)).floor() as i64).clamp(1, 1000) as u16,
+            cols,
+            rows,
         };
         let (frame, focused, focus, marked) = self.editor.update(cx, |editor, _| {
             editor.on_geometry(geometry);

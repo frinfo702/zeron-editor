@@ -31,6 +31,8 @@ use crate::{
 
 /// Corner radius of a floating card.
 const CARD_RADIUS: f32 = Theme::PANEL_RADIUS;
+/// Text inset inside the floating message / command line card.
+const MESSAGE_INSET: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Geometry {
@@ -42,7 +44,35 @@ pub(crate) struct Geometry {
 }
 
 impl Geometry {
-    fn cell(&self, col: usize, row: usize) -> Bounds<Pixels> {
+    /// Where a Helix row paints. Helix renders one row more than is visible:
+    /// its last row is the message / command line, which floats as a card
+    /// just above the statusline (see [`paint_frame`]).
+    pub fn display_row(&self, row: usize) -> usize {
+        if row >= self.rows as usize {
+            (self.rows as usize).saturating_sub(2)
+        } else {
+            row
+        }
+    }
+
+    /// Horizontal inset of a Helix row's content: the floating message line
+    /// sits inside its card with some breathing room.
+    pub fn row_inset(&self, row: usize) -> Pixels {
+        if row >= self.rows as usize {
+            px(MESSAGE_INSET)
+        } else {
+            px(0.0)
+        }
+    }
+
+    /// A Helix cell's bounds where it paints (see [`Self::display_row`]).
+    pub fn helix_cell(&self, col: usize, row: usize) -> Bounds<Pixels> {
+        let mut cell = self.cell(col, self.display_row(row));
+        cell.origin.x += self.row_inset(row);
+        cell
+    }
+
+    pub(crate) fn cell(&self, col: usize, row: usize) -> Bounds<Pixels> {
         Bounds::new(
             point(
                 self.origin.x + self.cell_w * col as f32,
@@ -402,6 +432,14 @@ pub(crate) fn paint_frame(
     let cols = width.min(g.cols as usize);
     let rows = (buffer.area.height as usize).min(g.rows as usize);
     let cell_at = |col: usize, row: usize| &buffer.content[row * width + col];
+    // Helix's message / command line (the row below the statusline) only
+    // shows while it has something to say or holds the prompt cursor.
+    let message_row = (buffer.area.height as usize > rows)
+        .then_some(rows)
+        .filter(|&row| {
+            frame.cursor.is_some_and(|(_, r)| r as usize == row)
+                || (0..cols).any(|col| !cell_at(col, row).symbol.trim().is_empty())
+        });
 
     let rects = find_cards(cols, rows, |col, row| {
         Token::of(cell_at(col, row).bg).is_some_and(Token::is_overlay)
@@ -425,13 +463,30 @@ pub(crate) fn paint_frame(
             layer: Layer::default(),
         })
         .collect();
+    let message_card = message_row.map(|row| {
+        let at = g.display_row(row);
+        cards.push(Card {
+            bounds: Bounds::from_corners(
+                g.cell(0, at).origin,
+                g.cell(cols.saturating_sub(1), at).origin + point(g.cell_w, g.line_h),
+            ),
+            layer: Layer::default(),
+        });
+        cards.len() - 1
+    });
 
-    for row in 0..rows {
-        let y = g.origin.y + g.line_h * row as f32;
+    for row in (0..rows).chain(message_row) {
+        let at = g.display_row(row);
+        let y = g.origin.y + g.line_h * at as f32;
+        let x0 = g.origin.x + g.row_inset(row);
         let paints: Vec<CellPaint> = (0..cols)
             .map(|col| resolve_cell(cell_at(col, row), theme))
             .collect();
-        let owners: Vec<Option<usize>> = (0..cols).map(|col| card_of(col, row)).collect();
+        let owners: Vec<Option<usize>> = if Some(row) == message_row {
+            vec![message_card; cols]
+        } else {
+            (0..cols).map(|col| card_of(col, row)).collect()
+        };
 
         // The statusline: a hairline along its top instead of a band.
         let mut status: Option<usize> = None;
@@ -446,7 +501,7 @@ pub(crate) fn paint_frame(
                 (Some(start), false) => {
                     base.rules.push(fill(
                         Bounds::new(
-                            point(g.origin.x + g.cell_w * start as f32, y),
+                            point(x0 + g.cell_w * start as f32, y),
                             size(g.cell_w * (col - start) as f32, px(1.0)),
                         ),
                         theme.border,
@@ -470,7 +525,7 @@ pub(crate) fn paint_frame(
                 (current, next) => {
                     if let Some((start, color, owner, badge)) = current {
                         let cells = Bounds::new(
-                            point(g.origin.x + g.cell_w * start as f32, y),
+                            point(x0 + g.cell_w * start as f32, y),
                             size(g.cell_w * (col - start) as f32, g.line_h),
                         );
                         let quad = if badge {
@@ -533,7 +588,7 @@ pub(crate) fn paint_frame(
                 None,
             );
             runs.clear();
-            let entry = (point(g.origin.x + g.cell_w * seg_col as f32, y), shaped);
+            let entry = (point(x0 + g.cell_w * seg_col as f32, y), shaped);
             match owner {
                 Some(card) => cards[card].layer.lines.push(entry),
                 None => base.lines.push(entry),
@@ -578,10 +633,13 @@ pub(crate) fn paint_frame(
                 prev_vertical = vertical_only.then_some((col, owner));
                 let color = theme.border;
                 match owner {
-                    Some(card) => {
-                        push_rules(&mut cards[card].layer.rules, g.cell(col, row), arms, color)
-                    }
-                    None => push_rules(&mut base.rules, g.cell(col, row), arms, color),
+                    Some(card) => push_rules(
+                        &mut cards[card].layer.rules,
+                        g.helix_cell(col, row),
+                        arms,
+                        color,
+                    ),
+                    None => push_rules(&mut base.rules, g.helix_cell(col, row), arms, color),
                 }
             }
             let symbol = if paint.hidden || cell.symbol.is_empty() || arms.is_some() {
@@ -643,7 +701,7 @@ pub(crate) fn paint_frame(
     // Helix draws block cursors into the grid itself; a bar or underline
     // cursor is the "terminal" cursor, painted here.
     let cursor = frame.cursor.and_then(|(col, row)| {
-        let cell = g.cell(col as usize, row as usize);
+        let cell = g.helix_cell(col as usize, row as usize);
         let color = if focused {
             theme.caret
         } else {
@@ -686,7 +744,7 @@ pub(crate) fn marked_text(
     font_size: Pixels,
     window: &Window,
 ) -> (PaintQuad, Point<Pixels>, ShapedLine) {
-    let origin = g.cell(col as usize, row as usize).origin;
+    let origin = g.helix_cell(col as usize, row as usize).origin;
     let len = text.len();
     let shaped = window.text_system().shape_line(
         text.into(),
