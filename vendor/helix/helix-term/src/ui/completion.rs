@@ -587,6 +587,7 @@ impl Component for Completion {
         self.host_doc = Some(crate::ui::host_view::DocView {
             area: doc_area,
             markdown: markdown_doc.contents().to_string(),
+            anchor: Default::default(),
         });
 
         // clear area

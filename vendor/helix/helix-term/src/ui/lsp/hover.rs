@@ -82,6 +82,7 @@ impl Component for Hover {
             crate::ui::host_view::DocView {
                 area: Default::default(),
                 markdown,
+                anchor: Default::default(),
             },
         )]
     }

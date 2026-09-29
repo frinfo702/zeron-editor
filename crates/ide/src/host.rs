@@ -32,7 +32,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tui::buffer::Buffer;
 
 pub use helix_term::ui::host_view::{
-    DocView, MenuView, PickerView, PreviewBody, PreviewView, PromptView, SignatureView,
+    Anchor, DocView, MenuView, PickerView, PreviewBody, PreviewView, PromptView, SignatureView,
 };
 pub use helix_view::input::Event;
 
@@ -368,6 +368,7 @@ fn run(
         }
         let themed = config.theme.is_some();
         helix_term::ui::host_view::set_picker_row_scale(crate::picker::ROW_SCALE);
+        helix_term::ui::host_view::set_host_draws_popups(true);
         let mut app = Application::new(args, config, lang_loader).context("start helix")?;
         if let Some(host) = host_config {
             if !themed {

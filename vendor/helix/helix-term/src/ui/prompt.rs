@@ -525,6 +525,7 @@ impl Prompt {
                 crate::ui::host_view::DocView {
                     area,
                     markdown: doc.to_string(),
+                    anchor: Default::default(),
                 },
             ));
 

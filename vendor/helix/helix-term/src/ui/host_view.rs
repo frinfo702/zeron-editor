@@ -100,6 +100,34 @@ pub struct DocView {
     pub area: Rect,
     /// The Markdown source Helix renders.
     pub markdown: String,
+    /// How the host may size it.
+    pub anchor: Anchor,
+}
+
+/// Where a floating view hangs from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Anchor {
+    /// Fills its area (Helix drew it; completion docs, prompt help).
+    #[default]
+    Fill,
+    /// A cursor popup below the cursor: its top edge is fixed and the host
+    /// sizes it to its content. Helix leaves its cells unpainted.
+    Below,
+    /// A cursor popup above the cursor: its bottom edge is fixed.
+    Above,
+}
+
+static HOST_DRAWS_POPUPS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The host draws docs and signature popups itself, sized to their content,
+/// so `Popup` only lays them out and leaves the cells beneath untouched.
+pub fn set_host_draws_popups(on: bool) {
+    HOST_DRAWS_POPUPS.store(on, Ordering::Relaxed);
+}
+
+pub fn host_draws_popups() -> bool {
+    HOST_DRAWS_POPUPS.load(Ordering::Relaxed)
 }
 
 /// The command line's completion grid, as it last rendered.
@@ -129,6 +157,8 @@ pub struct SignatureView {
     pub index: Option<String>,
     /// Markdown documentation of the signature.
     pub doc: Option<String>,
+    /// Filled in by the popup holding it.
+    pub anchor: Anchor,
 }
 
 #[derive(Debug, Clone, PartialEq)]

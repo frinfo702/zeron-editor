@@ -252,12 +252,21 @@ impl<T: Component> Popup<T> {
 impl<T: Component> Component for Popup<T> {
     // zeron: a popup reports what it holds (a menu, …) to a host.
     fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        use crate::ui::host_view::{Anchor, HostView};
         let mut views = self.contents.host_views();
+        let anchor = match self.position {
+            Some(position) if (self.area.y as usize) < position.row => Anchor::Above,
+            _ => Anchor::Below,
+        };
         for view in &mut views {
             match view {
-                crate::ui::host_view::HostView::Doc(doc) => doc.area = self.area,
-                crate::ui::host_view::HostView::Signature(signature) => {
-                    signature.area = self.area
+                HostView::Doc(doc) => {
+                    doc.area = self.area;
+                    doc.anchor = anchor;
+                }
+                HostView::Signature(signature) => {
+                    signature.area = self.area;
+                    signature.anchor = anchor;
                 }
                 _ => {}
             }
@@ -323,6 +332,20 @@ impl<T: Component> Component for Popup<T> {
             is_menu,
         } = self.render_info(viewport, cx.editor);
         self.area = area;
+
+        // zeron: a host that draws docs and signature popups itself only
+        // needs the layout; the text beneath stays visible around its card.
+        if crate::ui::host_view::host_draws_popups()
+            && self.contents.host_views().iter().any(|view| {
+                matches!(
+                    view,
+                    crate::ui::host_view::HostView::Doc(_)
+                        | crate::ui::host_view::HostView::Signature(_)
+                )
+            })
+        {
+            return;
+        }
 
         // clear area
         let background = if is_menu {

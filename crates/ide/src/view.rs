@@ -571,6 +571,106 @@ fn signature_highlights(
     runs
 }
 
+/// Corner radius of a docs / signature popup (Zed's hover card).
+const POPUP_RADIUS: f32 = 8.0;
+/// Horizontal padding inside a docs / signature popup.
+const POPUP_PAD_X: f32 = 10.0;
+/// A cursor popup opens above the cursor instead when fewer rows than this
+/// fit below it and there is more room above.
+const POPUP_MIN_ROWS: f32 = 12.0;
+
+/// A hairline across the whole popup, between a signature and its docs.
+fn popup_rule(theme: &Theme) -> gpui::AnyElement {
+    div()
+        .my(px(2.0))
+        .h(px(1.0))
+        .w_full()
+        .bg(theme.border)
+        .into_any_element()
+}
+
+/// A docs popup's blocks, the way Zed lays out hover docs: code blocks as
+/// plain highlighted code in the code font (no box, no language label),
+/// wrapping; thematic breaks as full-width hairlines; everything else in
+/// Zeron's Markdown renderer.
+fn doc_blocks(
+    parsed: &ParsedDoc,
+    key: &str,
+    theme: &Theme,
+    window: &Window,
+) -> Vec<gpui::AnyElement> {
+    parsed
+        .tree
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(ix, top)| match &top.block {
+            zeron_markdown::Block::CodeBlock { code, .. } => {
+                let code = code.trim_end_matches('\n').to_string();
+                let runs = parsed
+                    .highlights
+                    .get(ix)
+                    .cloned()
+                    .flatten()
+                    .map(|document| syntax_runs(&code, &document, theme))
+                    .unwrap_or_default();
+                div()
+                    .px(px(POPUP_PAD_X))
+                    .font_family(theme.font_mono.clone())
+                    .text_color(theme.code_text)
+                    .child(gpui::StyledText::new(code).with_highlights(runs))
+                    .into_any_element()
+            }
+            zeron_markdown::Block::Rule => popup_rule(theme),
+            _ => {
+                let tree = zeron_markdown::BlockTree {
+                    blocks: vec![top.clone()],
+                };
+                let opts = zeron_ui::markdown::render::RenderOptions::settled(
+                    format!("{key}-{ix}").into(),
+                );
+                div()
+                    .px(px(POPUP_PAD_X))
+                    .child(zeron_ui::markdown::render::render_tree(
+                        &tree,
+                        &opts,
+                        theme,
+                        window,
+                        &|_| None,
+                    ))
+                    .into_any_element()
+            }
+        })
+        .collect()
+}
+
+/// Syntax colors for `text` from its highlighted lines, as text runs.
+fn syntax_runs(
+    text: &str,
+    document: &zeron_syntax::HighlightedDocument,
+    theme: &Theme,
+) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+    let mut runs = Vec::new();
+    let mut line_start = 0;
+    for (line, spans) in text.split_inclusive('\n').zip(&document.lines) {
+        for span in spans {
+            let start = (line_start + span.range.start).min(text.len());
+            let end = (line_start + span.range.end).min(text.len());
+            if start < end && text.is_char_boundary(start) && text.is_char_boundary(end) {
+                runs.push((
+                    start..end,
+                    gpui::HighlightStyle {
+                        color: Some(theme.syntax.color(span.kind)),
+                        ..Default::default()
+                    },
+                ));
+            }
+        }
+        line_start += line.len();
+    }
+    runs
+}
+
 /// A docs popup's Markdown, parsed, with its code blocks highlighted.
 struct ParsedDoc {
     tree: zeron_markdown::BlockTree,
@@ -869,10 +969,10 @@ impl Render for HelixEditor {
 }
 
 impl HelixEditor {
-    /// Helix's documentation popups (hover, completion docs) as Zeron
-    /// Markdown cards, placed over the cells Helix gave them.
+    /// Helix's documentation popups (hover, completion docs, prompt help),
+    /// drawn the way Zed draws them (see [`Self::popup_card`]).
     fn render_docs(&self, theme: &Theme, window: &Window) -> Vec<gpui::AnyElement> {
-        let (Some(frame), Some(g)) = (self.frame.as_ref(), self.geometry) else {
+        let Some(frame) = self.frame.as_ref() else {
             return Vec::new();
         };
         // Keep only the docs still on screen.
@@ -883,64 +983,170 @@ impl HelixEditor {
             .docs
             .iter()
             .enumerate()
-            .map(|(ix, doc)| {
-                let a = doc.area;
-                let first = g.helix_cell(a.x as usize, a.y as usize);
-                let last = g.helix_cell(
-                    (a.x + a.width).saturating_sub(1) as usize,
-                    (a.y + a.height).saturating_sub(1) as usize,
-                );
-                let mut origin = first.origin - self.grid_origin;
-                // While the prompt holds the statusline row, its help and
-                // completions sit one row higher (see paint.rs).
-                if g.prompt {
-                    origin.y -= g.line_h;
-                }
-                let size = last.origin + point(g.cell_w, g.line_h) - first.origin;
+            .filter_map(|(ix, doc)| {
                 let parsed = parsed_doc(&self.doc_cache, &doc.markdown);
-                let opts = zeron_ui::markdown::render::RenderOptions::settled(
-                    format!("helix-doc-{ix}").into(),
-                );
-                let body = zeron_ui::markdown::render::render_tree(
-                    &parsed.tree,
-                    &opts,
+                let body = doc_blocks(&parsed, &format!("helix-doc-{ix}"), theme, window);
+                self.popup_card(
+                    ("helix-doc", ix),
+                    doc.area,
+                    doc.anchor,
+                    div().flex().flex_col().gap(px(6.0)).children(body),
                     theme,
-                    window,
-                    &|block| parsed.highlights.get(block).cloned().flatten(),
-                );
-                let fill = if theme.is_frost() {
-                    theme.glass_overlay()
-                } else {
-                    theme.surface_dialog
-                };
-                div()
-                    .absolute()
-                    .left(origin.x)
-                    .top(origin.y)
-                    .w(size.x)
-                    .h(size.y)
-                    .occlude()
-                    .child(zeron_ui::frost::frosted(
-                        Theme::PANEL_RADIUS,
-                        zeron_ui::frost::MENU_BLUR,
-                        div()
-                            .id(("helix-doc", ix))
-                            .size_full()
-                            .rounded(px(Theme::PANEL_RADIUS))
-                            .bg(fill)
-                            .border_1()
-                            .border_color(theme.border)
-                            .shadow_md()
-                            .px(px(12.0))
-                            .py(px(8.0))
-                            .overflow_y_scroll()
-                            .text_size(px(13.0))
-                            .text_color(theme.text)
-                            .child(body),
-                    ))
-                    .into_any_element()
+                )
             })
             .collect()
+    }
+
+    /// A floating card over the grid, Zed's hover style: an opaque (or
+    /// frosted) surface, hairline border, small radius, no inner boxes.
+    ///
+    /// A cursor popup (`Below` / `Above`) keeps the edge next to the cursor
+    /// where Helix put it and sizes itself to its content, up to Helix's
+    /// width and the room to the grid's edge, scrolling past that. A `Fill`
+    /// view covers exactly the cells Helix drew.
+    fn popup_card(
+        &self,
+        id: impl Into<ElementId>,
+        area: helix_view::graphics::Rect,
+        anchor: crate::host::Anchor,
+        body: gpui::Div,
+        theme: &Theme,
+    ) -> Option<gpui::AnyElement> {
+        use crate::host::Anchor;
+        let g = self.geometry?;
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        let first = g.helix_cell(area.x as usize, area.y as usize);
+        let last = g.helix_cell(
+            (area.x + area.width).saturating_sub(1) as usize,
+            (area.y + area.height).saturating_sub(1) as usize,
+        );
+        let mut top = first.origin.y - self.grid_origin.y;
+        let mut bottom = last.origin.y + g.line_h - self.grid_origin.y;
+        // While the prompt holds the statusline row, its help and
+        // completions sit one row higher (see paint.rs).
+        if g.prompt && anchor == Anchor::Fill {
+            top -= g.line_h;
+            bottom -= g.line_h;
+        }
+        let left = first.origin.x - self.grid_origin.x;
+        let width = last.origin.x + g.cell_w - first.origin.x;
+        // The grid's text area: under the top padding, above the statusline.
+        let grid_top = g.origin.y - self.grid_origin.y;
+        let grid_bottom =
+            g.cell(0, g.rows.saturating_sub(1) as usize).origin.y - self.grid_origin.y;
+        let grid_height = grid_bottom + g.line_h;
+        let fill = if theme.is_frost() {
+            theme.glass_overlay()
+        } else {
+            theme.surface_dialog
+        };
+        let card = div()
+            .id(id)
+            .rounded(px(POPUP_RADIUS))
+            .bg(fill)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_md()
+            .py(px(8.0))
+            .overflow_y_scroll()
+            .text_size(px(theme.code_font_size))
+            .text_color(theme.text)
+            .child(body);
+        // Room for the card's own padding beyond Helix's one-cell margin,
+        // within the grid.
+        let grid_right = g.cell(g.cols as usize, 0).origin.x - self.grid_origin.x;
+        let width = (width + px(2.0 * (POPUP_PAD_X + 1.0)) - g.cell_w * 2.0)
+            .max(width)
+            .min(grid_right - left);
+        // Helix picks a side when at least a few rows fit; the card is taller
+        // than Helix's estimate, so it opens on the side with more room when
+        // the room below is short.
+        let anchor = match anchor {
+            Anchor::Below => {
+                let cursor_top = top - g.line_h;
+                let (below, above) = (grid_bottom - top, cursor_top - grid_top);
+                if below < g.line_h * POPUP_MIN_ROWS && above > below {
+                    bottom = cursor_top;
+                    Anchor::Above
+                } else {
+                    Anchor::Below
+                }
+            }
+            anchor => anchor,
+        };
+        let outer = div().absolute().left(left).occlude();
+        let (outer, card) = match anchor {
+            Anchor::Fill => (outer.top(top).w(width).h(bottom - top), card.size_full()),
+            Anchor::Below => (
+                outer.top(top).max_w(width),
+                card.max_h((grid_bottom - top - px(4.0)).max(g.line_h * 3.0)),
+            ),
+            Anchor::Above => (
+                outer
+                    .bottom((grid_height - bottom).max(px(0.0)))
+                    .max_w(width),
+                card.max_h((bottom - grid_top).max(g.line_h * 3.0)),
+            ),
+        };
+        Some(
+            outer
+                .child(zeron_ui::frost::frosted(
+                    POPUP_RADIUS,
+                    zeron_ui::frost::MENU_BLUR,
+                    card,
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// LSP signature help, Zed-style: the signature in the code font,
+    /// syntax-highlighted with the active parameter washed in the accent,
+    /// then a hairline and its documentation.
+    fn render_signature(&self, theme: &Theme, window: &Window) -> Option<gpui::AnyElement> {
+        let view = self.frame.as_ref()?.signature.as_ref()?;
+        let runs = signature_highlights(view, theme);
+        let signature = gpui::StyledText::new(view.signature.clone()).with_highlights(runs);
+        let doc = view.doc.as_deref().map(|doc| {
+            let parsed = parsed_doc(&self.doc_cache, doc);
+            doc_blocks(&parsed, "helix-signature", theme, window)
+        });
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .px(px(POPUP_PAD_X))
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_family(theme.font_mono.clone())
+                            .text_color(theme.code_text)
+                            .child(signature),
+                    )
+                    .children(view.index.clone().map(|index| {
+                        div()
+                            .flex_none()
+                            .text_size(px(12.0))
+                            .text_color(theme.text_faint)
+                            .child(index)
+                    })),
+            )
+            .children(doc.map(|blocks| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(popup_rule(theme))
+                    .children(blocks)
+            }));
+        self.popup_card("helix-signature", view.area, view.anchor, body, theme)
     }
 
     /// An image file selected in a picker, fitted into the preview body.
@@ -973,95 +1179,6 @@ impl HelixEditor {
                         .size_full()
                         .object_fit(gpui::ObjectFit::Contain),
                 )
-                .into_any_element(),
-        )
-    }
-
-    /// LSP signature help as a Zeron card: the signature in the code font,
-    /// syntax-highlighted with the active parameter washed in the accent,
-    /// then its documentation as Markdown.
-    fn render_signature(&self, theme: &Theme, window: &Window) -> Option<gpui::AnyElement> {
-        let (frame, g) = (self.frame.as_ref()?, self.geometry?);
-        let view = frame.signature.as_ref()?;
-        let a = view.area;
-        let first = g.helix_cell(a.x as usize, a.y as usize);
-        let last = g.helix_cell(
-            (a.x + a.width).saturating_sub(1) as usize,
-            (a.y + a.height).saturating_sub(1) as usize,
-        );
-        let origin = first.origin - self.grid_origin;
-        let extent = last.origin + point(g.cell_w, g.line_h) - first.origin;
-        let runs = signature_highlights(view, theme);
-        let signature = gpui::StyledText::new(view.signature.clone()).with_highlights(runs);
-        let doc = view.doc.as_deref().map(|doc| {
-            let parsed = parsed_doc(&self.doc_cache, doc);
-            let opts = zeron_ui::markdown::render::RenderOptions::settled("helix-signature".into());
-            zeron_ui::markdown::render::render_tree(&parsed.tree, &opts, theme, window, &|block| {
-                parsed.highlights.get(block).cloned().flatten()
-            })
-        });
-        let fill = if theme.is_frost() {
-            theme.glass_overlay()
-        } else {
-            theme.surface_dialog
-        };
-        Some(
-            div()
-                .absolute()
-                .left(origin.x)
-                .top(origin.y)
-                .w(extent.x)
-                .h(extent.y)
-                .occlude()
-                .child(zeron_ui::frost::frosted(
-                    Theme::PANEL_RADIUS,
-                    zeron_ui::frost::MENU_BLUR,
-                    div()
-                        .id("helix-signature")
-                        .size_full()
-                        .rounded(px(Theme::PANEL_RADIUS))
-                        .bg(fill)
-                        .border_1()
-                        .border_color(theme.border)
-                        .shadow_md()
-                        .px(px(12.0))
-                        .py(px(8.0))
-                        .overflow_y_scroll()
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .gap(px(8.0))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .font_family(theme.font_mono.clone())
-                                        .text_size(px(theme.code_font_size))
-                                        .text_color(theme.code_text)
-                                        .child(signature),
-                                )
-                                .children(view.index.clone().map(|index| {
-                                    div()
-                                        .flex_none()
-                                        .text_size(px(12.0))
-                                        .text_color(theme.text_faint)
-                                        .child(index)
-                                })),
-                        )
-                        .children(doc.map(|doc| {
-                            div()
-                                .pt(px(6.0))
-                                .border_t_1()
-                                .border_color(theme.border)
-                                .text_size(px(13.0))
-                                .text_color(theme.text)
-                                .child(doc)
-                        })),
-                ))
                 .into_any_element(),
         )
     }

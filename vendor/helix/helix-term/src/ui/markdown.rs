@@ -379,6 +379,7 @@ impl Component for Markdown {
             crate::ui::host_view::DocView {
                 area: Default::default(),
                 markdown: self.contents.clone(),
+                anchor: Default::default(),
             },
         )]
     }

@@ -65,14 +65,18 @@ that runs on another device shows an explanation instead of an editor.
   drawn natively too, and image files show the image itself. Code stays
   Helix's own highlighted cells below the title.
 - **Native docs popups.** Hover, completion docs and the command line's
-  help report their Markdown and area (`DocView`); the view lays a frosted
-  Zeron card over those cells and renders the Markdown with Zeron's own
-  renderer (single newlines kept as breaks, as Helix shows them; code
-  blocks highlighted by `zeron-syntax`, without a language header).
+  help report their Markdown, area and anchor (`DocView`). Cursor popups
+  (hover, signature help) are left unpainted by Helix
+  (`set_host_draws_popups`); the view draws them the way Zed does: a card
+  sized to its content, hanging from the edge next to the cursor (opening
+  above when the room below is short), code blocks as plain highlighted
+  code without a box, thematic breaks as full-width hairlines, the rest in
+  Zeron's Markdown renderer. Completion docs and prompt help fill the cells
+  Helix gave them.
 - **Native signature help.** `SignatureView` carries the signature, the
   active parameter's range and its docs: the signature in the code font,
-  syntax-highlighted with the active parameter washed in the accent, then
-  the docs as Markdown.
+  syntax-highlighted with the active parameter washed in the accent, a
+  hairline, then the docs, in the same card as hover.
 - **Native command line completions.** The `:` prompt's completion grid
   (`PromptView`) is drawn as measured columns with a rounded selection;
   clicks pick an item.

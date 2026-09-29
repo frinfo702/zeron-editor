@@ -64,3 +64,7 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
 - `host_view::set_picker_row_scale`: a host that draws picker items taller
   than one grid row sets the scale, and `Picker` lays out (and pages) that
   many fewer items.
+- `DocView` / `SignatureView` carry an `Anchor` (`Popup` records whether it
+  opened below or above the cursor). With `host_view::set_host_draws_popups`
+  a `Popup` holding docs or signature help only lays itself out and leaves
+  the cells beneath unpainted, so the host can size its card to the content.

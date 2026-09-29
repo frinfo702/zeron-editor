@@ -614,11 +614,19 @@ pub(crate) fn paint_frame(
     let native_info = frame.info.as_ref().map(|info| info.area);
     let native_prompt = frame.prompt.as_ref().map(|prompt| prompt.area);
     // Docs popups are drawn by the view as Markdown overlays: blank here.
+    // Cursor popups Helix left unpainted are not cells at all.
     let native_docs: Vec<helix_view::graphics::Rect> = frame
         .docs
         .iter()
+        .filter(|doc| doc.anchor == crate::host::Anchor::Fill)
         .map(|doc| doc.area)
-        .chain(frame.signature.iter().map(|signature| signature.area))
+        .chain(
+            frame
+                .signature
+                .iter()
+                .filter(|signature| signature.anchor == crate::host::Anchor::Fill)
+                .map(|signature| signature.area),
+        )
         .collect();
     let contains = |rect: helix_view::graphics::Rect, col: usize, row: usize| {
         (rect.x as usize..(rect.x + rect.width) as usize).contains(&col)

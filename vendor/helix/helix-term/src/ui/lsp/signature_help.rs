@@ -85,6 +85,7 @@ impl Component for SignatureHelp {
                 active_param: signature.active_param_range,
                 index: (self.signatures.len() > 1).then(|| self.signature_index()),
                 doc: signature.signature_doc.clone(),
+                anchor: Default::default(),
             },
         )]
     }
