@@ -45,6 +45,30 @@ pub struct Frame {
     pub accepts_text: bool,
     /// Open buffers in Helix's order, for the view's tab strip.
     pub buffers: Vec<BufferTab>,
+    /// In insert mode, the screen cell of each selection's trailing cursor
+    /// grapheme: Helix highlights it as part of the range, a non-modal
+    /// editor does not (see `standard::caret_selection`).
+    pub selection_tails: Vec<(u16, u16)>,
+}
+
+fn selection_tails(editor: &helix_view::Editor) -> Vec<(u16, u16)> {
+    if editor.mode() != Mode::Insert {
+        return Vec::new();
+    }
+    let view = editor.tree.get(editor.tree.focus);
+    let Some(doc) = editor.documents.get(&view.doc) else {
+        return Vec::new();
+    };
+    let text = doc.text().slice(..);
+    doc.selection(view.id)
+        .ranges()
+        .iter()
+        .filter_map(|range| {
+            let (_, end) = crate::standard::caret_selection(text, range)?;
+            let pos = view.screen_coords_at_pos(doc, text, end)?;
+            Some((pos.col as u16, pos.row as u16))
+        })
+        .collect()
 }
 
 /// One open buffer, as the tab strip shows it.
@@ -91,6 +115,7 @@ impl Frame {
             mode: frame.editor.mode(),
             accepts_text: accepts_text(frame),
             buffers: buffers(frame.editor),
+            selection_tails: selection_tails(frame.editor),
         }
     }
 }

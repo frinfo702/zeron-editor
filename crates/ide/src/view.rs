@@ -809,20 +809,21 @@ impl Element for HelixGrid {
             cols,
             rows,
         };
-        let (frame, focused, focus, marked) = self.editor.update(cx, |editor, _| {
+        let (frame, focused, focus, marked, modeless) = self.editor.update(cx, |editor, _| {
             editor.on_geometry(geometry);
             (
                 editor.frame.clone(),
                 editor.focus.is_focused(window),
                 editor.focus.clone(),
                 editor.marked.clone(),
+                keymap::is_modeless(editor.settings.keymap),
             )
         });
         let Some(frame) = frame else {
             return GridPaint::empty(line_h, focus);
         };
         let mut grid = paint::paint_frame(
-            &frame, &geometry, &theme, &mono, font_size, focused, focus, window,
+            &frame, &geometry, &theme, &mono, font_size, focused, focus, modeless, window,
         );
         grid.marked = marked.zip(frame.cursor).map(|(text, cursor)| {
             paint::marked_text(text, cursor, &geometry, &theme, &mono, font_size, window)

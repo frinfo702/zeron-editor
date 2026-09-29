@@ -425,6 +425,8 @@ pub(crate) fn paint_frame(
     font_size: Pixels,
     focused: bool,
     focus: FocusHandle,
+    // Standard mode: don't highlight the cursor grapheme at a selection's end.
+    trim_selection_tails: bool,
     window: &Window,
 ) -> GridPaint {
     let buffer = &frame.buffer;
@@ -480,7 +482,19 @@ pub(crate) fn paint_frame(
         let y = g.origin.y + g.line_h * at as f32;
         let x0 = g.origin.x + g.row_inset(row);
         let paints: Vec<CellPaint> = (0..cols)
-            .map(|col| resolve_cell(cell_at(col, row), theme))
+            .map(|col| {
+                let mut paint = resolve_cell(cell_at(col, row), theme);
+                if trim_selection_tails
+                    && matches!(
+                        paint.bg_token,
+                        Some(Token::Selection | Token::SelectionPrimary)
+                    )
+                    && frame.selection_tails.contains(&(col as u16, row as u16))
+                {
+                    paint.bg = None;
+                }
+                paint
+            })
             .collect();
         let owners: Vec<Option<usize>> = if Some(row) == message_row {
             vec![message_card; cols]

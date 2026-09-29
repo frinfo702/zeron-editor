@@ -46,6 +46,13 @@ that runs on another device shows an explanation instead of an editor.
   clear their area with overlay tokens. The painter turns each such region
   into a card in its own layer: shadow, blur on frosted surfaces, rounded
   fill, hairline border. Box-drawing characters become 1px lines.
+- **Tabs and the command line.** Open buffers show as a Zeron tab strip
+  above the grid. Helix's message / command line row is hidden and floats
+  as a card above the statusline while in use.
+- **Standard mode.** Typing, pasting, Backspace and Delete act on a
+  caret-style selection (`standard.rs`). Helix ranges always include the
+  cursor grapheme; that trailing grapheme is neither edited nor
+  highlighted.
 - **Keys** are taken in a keystroke interceptor, ahead of Zeron's app-wide
   bindings. While the editor has focus it takes every key except ⌘ chords it
   does not claim (`keymap::PLATFORM_KEYS`; a test keeps that list in sync
@@ -117,10 +124,6 @@ borrows compiled grammars from an existing Helix install.
   statusline as a strip with mode pills. Their contents are still Helix's
   cell layout (monospace rows, `>` markers). Fully native components would
   need each layer's state exposed from `helix-term`.
-- **Standard mode's selection highlight runs one character past the caret.**
-  Typing, pasting, Backspace and Delete act on the caret-style selection
-  (`standard.rs`), but Helix still paints its range, which always includes
-  the character under the cursor.
 - **Off macOS, most Ctrl chords go to the editor** while it has focus, so
   Zeron's other `Mod` shortcuts (Ctrl there) are shadowed. The Agent/IDE
   switch and the sidebar, terminal, files and changes toggles always pass
@@ -130,5 +133,3 @@ borrows compiled grammars from an existing Helix install.
 - The IME path is covered by tests up to the Helix side (a committed string
   is typed and saved). A real macOS IME session has not been exercised in
   CI.
-- No bufferline/tabs of Zeron's own for open buffers. Helix's `:buffer`
-  picker (`space b`) works.
