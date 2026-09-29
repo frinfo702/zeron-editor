@@ -528,6 +528,8 @@ pub enum SettingsSection {
     Agents,
     Appearance,
     Files,
+    /// IDE mode's editor: keymap, gutter, Helix config files, grammars.
+    Editor,
     Notifications,
     Shortcuts,
     /// Composer and conversation behavior plus thread naming.
@@ -539,11 +541,12 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 9] = [
+    pub const ALL: [SettingsSection; 10] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Shortcuts,
+        SettingsSection::Editor,
         SettingsSection::Harnesses,
         SettingsSection::Devices,
         SettingsSection::Files,
@@ -585,6 +588,7 @@ impl SettingsSection {
             SettingsSection::Agents => "agents",
             SettingsSection::Appearance => "appearance",
             SettingsSection::Files => "files",
+            SettingsSection::Editor => "editor",
             SettingsSection::Notifications => "notifications",
             SettingsSection::Shortcuts => "shortcuts",
             SettingsSection::General => "general",
@@ -601,6 +605,7 @@ impl SettingsSection {
             "agents" => SettingsSection::Agents,
             "appearance" => SettingsSection::Appearance,
             "files" => SettingsSection::Files,
+            "editor" | "ide" => SettingsSection::Editor,
             "notifications" => SettingsSection::Notifications,
             "shortcuts" => SettingsSection::Shortcuts,
             "general" | "conversations" => SettingsSection::General,
@@ -625,6 +630,7 @@ impl SettingsSection {
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
+            SettingsSection::Editor => "Editor",
             SettingsSection::Notifications => "Notifications",
             SettingsSection::Shortcuts => "Shortcuts",
             SettingsSection::General => "General",
@@ -1854,6 +1860,8 @@ pub struct Shell {
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
+    editor_settings_page: Option<Entity<crate::settings::editor::EditorSettingsPage>>,
+    editor_settings_sub: Option<Subscription>,
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
@@ -2302,6 +2310,8 @@ impl Shell {
             archived_page: None,
             appearance_page: None,
             files_settings_page: None,
+            editor_settings_page: None,
+            editor_settings_sub: None,
             notifications_page: None,
             shortcuts_page: None,
             accounts_page: None,
@@ -4729,6 +4739,37 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
+            SettingsSection::Editor => {
+                use crate::settings::editor::{EditorSettingsEvent, EditorSettingsPage};
+                if self.editor_settings_page.is_none() {
+                    let page = cx.new(EditorSettingsPage::new);
+                    self.editor_settings_sub = Some(cx.subscribe_in(
+                        &page,
+                        window,
+                        |this: &mut Shell, _, event: &EditorSettingsEvent, window, cx| match event
+                        {
+                            EditorSettingsEvent::OpenConfigFile { file, folder } => {
+                                // Leave Settings without `close_settings`: its
+                                // focus restore would pull focus back to the
+                                // composer, away from the editor.
+                                this.settings_focus_pending = false;
+                                this.route = Route::Chat;
+                                this.ide_open_in_folder(folder.clone(), file.clone(), window, cx);
+                            }
+                            EditorSettingsEvent::ReloadConfig => {
+                                if let Some((_, editor)) = &this.ide_editor {
+                                    editor.reload_config(cx);
+                                }
+                            }
+                        },
+                    ));
+                    self.editor_settings_page = Some(page);
+                }
+                match &self.editor_settings_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
             SettingsSection::Files => {
                 if self.files_settings_page.is_none() {
                     let page = cx.new(|cx| {
@@ -6775,6 +6816,7 @@ impl Shell {
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
             SettingsSection::Files => icons::FOLDER,
+            SettingsSection::Editor => icons::PEN,
             SettingsSection::Notifications => icons::BELL,
             SettingsSection::Shortcuts => icons::KEYBOARD,
             SettingsSection::General => icons::SETTINGS,

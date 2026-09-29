@@ -14,6 +14,10 @@ fixture = ["dep:gpui_platform", "gpui_platform/test-support", "gpui/test-support
 name = "ide-fixture"
 required-features = ["fixture"]
 
+[[example]]
+name = "ide-shell-fixture"
+required-features = ["fixture"]
+
 [dependencies]
 gpui_platform = { workspace = true, optional = true }
 helix-core = { path = "../../vendor/helix/helix-core" }
@@ -38,6 +42,9 @@ tracing.workspace = true
 tree-sitter = "=0.26.11"
 
 [dev-dependencies]
+gpui-base.workspace = true
+zeron-proto.workspace = true
+serde_json.workspace = true
 gpui_tokio.workspace = true
 zeron-theme.workspace = true
 tracing-subscriber.workspace = true

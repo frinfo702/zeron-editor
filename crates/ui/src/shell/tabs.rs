@@ -326,12 +326,16 @@ impl Shell {
         // one button slot so the title never sits under it.
         let sidebar_now = self.sidebar_now();
         let plus_inset = TITLEBAR_ACTION_SLOT_WIDTH * self.titlebar_plus_alpha(cx);
+        // The Agent | IDE switch sits after it in the same cluster.
+        let mode_switch_inset = self.workspace_mode_switch_width(cx);
 
         // Same glide as the old strip: content starts at the inset card's
         // left edge while the sidebar is open, and slides toward the control
         // cluster as it collapses.
         let content_left =
-            (sidebar_now + Theme::SPACE_LG).max(self.title_bar_content_start() + plus_inset);
+            (sidebar_now + Theme::SPACE_LG).max(
+                self.title_bar_content_start() + plus_inset + mode_switch_inset,
+            );
 
         // Trailing titlebar section. With the changes pane open this is the
         // PANE'S HEADER — a strip exactly as wide as the pane carrying its

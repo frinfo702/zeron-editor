@@ -26,6 +26,13 @@ use crate::{
     theme::Theme,
 };
 
+/// One segment of the Agent | IDE switch; both share it so the switch keeps
+/// its size across fonts and labels.
+const MODE_SEGMENT_WIDTH: f32 = 48.0;
+/// Two segments, a 2px gap, 2px padding and a 1px border on each side.
+const MODE_SWITCH_WIDTH: f32 = 2.0 * MODE_SEGMENT_WIDTH + 2.0 + 2.0 * 2.0 + 2.0;
+const MODE_SWITCH_GAP: f32 = super::TITLEBAR_GROUP_GAP;
+
 /// Why IDE mode has no editor to show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum IdeUnavailable {
@@ -190,6 +197,16 @@ impl Shell {
         }
     }
 
+    /// Width the Agent | IDE switch adds to the titlebar cluster (0 while it
+    /// is hidden), so session titles start past it.
+    pub(super) fn workspace_mode_switch_width(&self, cx: &App) -> f32 {
+        if ide::available(cx) && matches!(self.route, super::Route::Chat) {
+            MODE_SWITCH_GAP + MODE_SWITCH_WIDTH
+        } else {
+            0.0
+        }
+    }
+
     /// The Agent | IDE segmented switch in the titlebar cluster.
     pub(super) fn render_workspace_mode_switch(
         &self,
@@ -205,9 +222,10 @@ impl Shell {
                     WorkspaceMode::Ide => "workspace-mode-ide",
                 })
                 .h_full()
-                .px(px(10.0))
+                .w(px(MODE_SEGMENT_WIDTH))
                 .flex()
                 .items_center()
+                .justify_center()
                 .rounded(px(5.0))
                 .text_size(px(12.0))
                 .text_color(if active { theme.text } else { theme.text_muted })
@@ -228,7 +246,8 @@ impl Shell {
         };
         div()
             .flex_none()
-            .ml(px(8.0))
+            .ml(px(MODE_SWITCH_GAP))
+            .w(px(MODE_SWITCH_WIDTH))
             .h(px(24.0))
             .p(px(2.0))
             .flex()

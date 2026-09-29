@@ -14,6 +14,9 @@ use zeron_ide::{
 };
 use zeron_ui::*;
 
+#[path = "support/tour.rs"]
+mod tour;
+
 fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let _guard = runtime.enter();
@@ -104,16 +107,7 @@ fn main() -> anyhow::Result<()> {
                 )
                 .unwrap();
             cx.activate(true);
-            if let Some(dir) = std::env::var_os("ZERON_IDE_SHOTS") {
-                let dir = std::path::PathBuf::from(dir);
-                cx.spawn(async move |cx| {
-                    if let Err(err) = tour(window.into(), &dir, cx).await {
-                        eprintln!("tour failed: {err:#}");
-                    }
-                    let _ = cx.update(|cx| cx.quit());
-                })
-                .detach();
-            }
+            tour::run_from_env(window.into(), cx);
         });
     Ok(())
 }
@@ -131,46 +125,4 @@ impl Render for Fixture {
             .font_family(theme.font_sans.clone())
             .child(self.editor.clone())
     }
-}
-
-/// Scripted keys (`ZERON_IDE_TOUR`, space-separated gpui keystrokes, `|`
-/// between shots) with a PNG after each group: shot-0.png is the untouched
-/// editor.
-async fn tour(
-    window: gpui::AnyWindowHandle,
-    dir: &std::path::Path,
-    cx: &mut gpui::AsyncApp,
-) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let script = std::env::var("ZERON_IDE_TOUR").unwrap_or_default();
-    let groups: Vec<&str> = std::iter::once("").chain(script.split('|')).collect();
-    for (ix, group) in groups.iter().enumerate() {
-        for key in group.split_whitespace() {
-            window.update(cx, |_, w, cx| {
-                let keystroke = gpui::Keystroke::parse(key).unwrap();
-                w.dispatch_event(
-                    gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
-                        keystroke,
-                        is_held: false,
-                        prefer_character_input: false,
-                    }),
-                    cx,
-                );
-            })?;
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(40))
-                .await;
-        }
-        // Let Helix render and the frame reach the view.
-        cx.background_executor()
-            .timer(std::time::Duration::from_millis(if ix == 0 { 2500 } else { 700 }))
-            .await;
-        window.update(cx, |_, w, cx| -> anyhow::Result<()> {
-            w.refresh();
-            w.draw(cx).clear();
-            w.render_to_image()?.save(dir.join(format!("shot-{ix}.png")))?;
-            Ok(())
-        })??;
-    }
-    Ok(())
 }
