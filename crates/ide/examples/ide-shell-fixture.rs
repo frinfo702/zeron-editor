@@ -4,6 +4,7 @@
 //!   cargo run -p zeron-ide --features fixture --example ide-shell-fixture -- [FOLDER]
 //!
 //! ZERON_IDE_MODE=agent starts in Agent mode (default ide);
+//! ZERON_SIDEBAR_WIDTH=<px> sets the sidebar width;
 //! ZERON_IDE_GRAMMARS_RUNTIME=<helix runtime dir> borrows compiled grammars;
 //! ZERON_IDE_SHOTS=<dir> + ZERON_IDE_TOUR renders a scripted tour, like
 //! ide-fixture.
@@ -34,6 +35,12 @@ fn main() -> anyhow::Result<()> {
                 Ok("agent") => ide::WorkspaceMode::Agent,
                 _ => ide::WorkspaceMode::Ide,
             };
+            if let Some(width) = std::env::var("ZERON_SIDEBAR_WIDTH")
+                .ok()
+                .and_then(|w| w.parse().ok())
+            {
+                settings.sidebar_width = width;
+            }
             settings.save(&data).unwrap();
             settings::init(settings.clone(), data.clone(), cx);
             zeron_ide::init(&data, cx);

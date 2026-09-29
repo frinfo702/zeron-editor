@@ -197,17 +197,17 @@ impl Shell {
         }
     }
 
-    /// Width the Agent | IDE switch adds to the titlebar cluster (0 while it
-    /// is hidden), so session titles start past it.
+    /// Width the Agent | IDE switch takes from the title row (0 while it is
+    /// hidden), including the row gap after it.
     pub(super) fn workspace_mode_switch_width(&self, cx: &App) -> f32 {
         if ide::available(cx) && matches!(self.route, super::Route::Chat) {
-            MODE_SWITCH_GAP + MODE_SWITCH_WIDTH
+            MODE_SWITCH_WIDTH + MODE_SWITCH_GAP
         } else {
             0.0
         }
     }
 
-    /// The Agent | IDE segmented switch in the titlebar cluster.
+    /// The Agent | IDE segmented switch leading the main column's title row.
     pub(super) fn render_workspace_mode_switch(
         &self,
         theme: &Theme,
@@ -246,7 +246,6 @@ impl Shell {
         };
         div()
             .flex_none()
-            .ml(px(MODE_SWITCH_GAP))
             .w(px(MODE_SWITCH_WIDTH))
             .h(px(24.0))
             .p(px(2.0))

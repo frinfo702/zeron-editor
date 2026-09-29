@@ -6288,10 +6288,6 @@ impl Shell {
                         cx.listener(|this, _, _, cx| this.open_new_session(cx)),
                     ))
             }))
-            .children(
-                (crate::ide::available(cx) && matches!(self.route, Route::Chat))
-                    .then(|| self.render_workspace_mode_switch(&theme, cx)),
-            )
             .into_any_element()
     }
 

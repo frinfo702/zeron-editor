@@ -326,16 +326,12 @@ impl Shell {
         // one button slot so the title never sits under it.
         let sidebar_now = self.sidebar_now();
         let plus_inset = TITLEBAR_ACTION_SLOT_WIDTH * self.titlebar_plus_alpha(cx);
-        // The Agent | IDE switch sits after it in the same cluster.
-        let mode_switch_inset = self.workspace_mode_switch_width(cx);
 
         // Same glide as the old strip: content starts at the inset card's
         // left edge while the sidebar is open, and slides toward the control
         // cluster as it collapses.
         let content_left =
-            (sidebar_now + Theme::SPACE_LG).max(
-                self.title_bar_content_start() + plus_inset + mode_switch_inset,
-            );
+            (sidebar_now + Theme::SPACE_LG).max(self.title_bar_content_start() + plus_inset);
 
         // Trailing titlebar section. With the changes pane open this is the
         // PANE'S HEADER — a strip exactly as wide as the pane carrying its
@@ -546,6 +542,12 @@ impl Shell {
         } else {
             available_titlebar_width
         };
+        // The Agent | IDE switch leads the main column's title row, so it
+        // always sits inside the column and never straddles the sidebar seam.
+        let mode_switch_width = self.workspace_mode_switch_width(cx);
+        let mode_switch = (mode_switch_width > 0.0 && !takeover)
+            .then(|| self.render_workspace_mode_switch(&theme, cx));
+        let available_titlebar_width = (available_titlebar_width - mode_switch_width).max(0.0);
         let actions = (!takeover && !on_canvas)
             .then(|| {
                 self.render_project_actions_control(available_titlebar_width, viewport_height, cx)
@@ -559,6 +561,7 @@ impl Shell {
             .gap(px(row_gap))
             .pl(px(row_left))
             .pr(px(right_pad))
+            .children(mode_switch)
             // In panel takeover the header strip spans the whole band — the
             // title would sit UNDER it (both flex_none, the row overflows and
             // paint order stacks them), so it hides for the duration.
