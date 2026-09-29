@@ -80,8 +80,12 @@ struct Geometry {
 pub struct HelixEditor {
     host: Option<HelixHost>,
     dirs: IdeDirs,
-    workspace_dir: PathBuf,
+    /// The folder Helix works in; the config loader reads its
+    /// `.helix/config.toml` on reload.
+    workspace_dir: Arc<std::sync::Mutex<PathBuf>>,
     settings: IdeSettings,
+    /// The settings the Helix-side config loader reads on reload.
+    shared_settings: Arc<std::sync::Mutex<IdeSettings>>,
     frame: Option<Arc<Frame>>,
     focus: FocusHandle,
     status: EditorStatus,
@@ -105,9 +109,22 @@ impl HelixEditor {
             files,
             settings,
         } = options;
-        let workspace_dir = workspace.clone();
+        let workspace_dir = Arc::new(std::sync::Mutex::new(workspace.clone()));
         let (config, config_error) = load_config(&dirs, &workspace, &settings);
-        let use_zeron_theme = config.theme.is_none();
+        let shared_settings = Arc::new(std::sync::Mutex::new(settings.clone()));
+        // `:config-reload` (and the settings page) rebuild through the same
+        // layering as startup, not from config.toml alone.
+        let (load_dirs, load_workspace, load_settings) =
+            (dirs.clone(), workspace_dir.clone(), shared_settings.clone());
+        let host_config = helix_term::application::headless::HostConfig {
+            load: Box::new(move || {
+                let settings = load_settings.lock().unwrap().clone();
+                let workspace = load_workspace.lock().unwrap().clone();
+                let (global, local) = read_config_files(&load_dirs, &workspace);
+                keymap::build_config(&settings, global.as_deref(), local.as_deref())
+            }),
+            default_theme: Box::new(theme::helix_theme),
+        };
 
         let (wake_tx, mut wake_rx) = mpsc::unbounded();
         let exit_tx = wake_tx.clone();
@@ -115,6 +132,7 @@ impl HelixEditor {
             workspace,
             files,
             config,
+            host_config: Some(host_config),
             on_frame: Box::new(move || {
                 let _ = wake_tx.unbounded_send(Wake::Frame);
             }),
@@ -124,9 +142,6 @@ impl HelixEditor {
         });
         let (host, status) = match spawned {
             Ok(host) => {
-                if use_zeron_theme {
-                    host.call(|app| app.editor.set_theme(theme::helix_theme()));
-                }
                 if keymap::is_modeless(settings.keymap) {
                     host.call(|app| app.editor.mode = Mode::Insert);
                 }
@@ -186,6 +201,7 @@ impl HelixEditor {
             dirs,
             workspace_dir,
             settings,
+            shared_settings,
             frame: None,
             focus,
             status,
@@ -199,17 +215,20 @@ impl HelixEditor {
         }
     }
 
-    /// Rebuild the Helix config from `settings` (and the files on disk) and
-    /// apply it live: keymap mode, gutter, wrapping.
+    /// Rebuild the Helix config from `settings` and the files on disk
+    /// (`config.toml`, `languages.toml`) and apply it live: keymap mode,
+    /// gutter, wrapping, language servers.
     pub fn apply_settings(&mut self, settings: IdeSettings, cx: &mut Context<Self>) {
-        let (config, config_error) = load_config(&self.dirs, &self.workspace_dir, &settings);
+        let workspace = self.workspace_dir.lock().unwrap().clone();
+        let (_, config_error) = load_config(&self.dirs, &workspace, &settings);
         let was_modeless = keymap::is_modeless(self.settings.keymap);
         let modeless = keymap::is_modeless(settings.keymap);
+        *self.shared_settings.lock().unwrap() = settings.clone();
         self.settings = settings;
         self.config_error = config_error;
         if let Some(host) = &self.host {
             host.call(move |app| {
-                app.replace_config(config);
+                app.reload_config();
                 if modeless {
                     app.editor.mode = Mode::Insert;
                 } else if was_modeless {
@@ -218,6 +237,40 @@ impl HelixEditor {
             });
         }
         cx.notify();
+    }
+
+    /// Point Helix at another folder: file pickers, global search and new
+    /// language servers root there. Open buffers from other folders stay.
+    pub fn set_workspace(&mut self, workspace: PathBuf, cx: &mut Context<Self>) {
+        {
+            let mut current = self.workspace_dir.lock().unwrap();
+            if *current == workspace {
+                return;
+            }
+            *current = workspace.clone();
+        }
+        let workspace_now = workspace.clone();
+        self.config_error = load_config(&self.dirs, &workspace_now, &self.settings).1;
+        if let Some(host) = &self.host {
+            host.call(move |app| {
+                match helix_stdx::env::set_current_working_dir(&workspace) {
+                    Ok(_) => {
+                        // A workspace may carry its own .helix/config.toml.
+                        app.reload_config();
+                        app.editor
+                            .set_status(format!("Workspace: {}", workspace.display()));
+                    }
+                    Err(err) => app
+                        .editor
+                        .set_error(format!("{}: {err}", workspace.display())),
+                }
+            });
+        }
+        cx.notify();
+    }
+
+    pub fn settings(&self) -> &IdeSettings {
+        &self.settings
     }
 
     pub fn status(&self) -> &EditorStatus {
@@ -357,8 +410,7 @@ fn load_config(
     workspace: &std::path::Path,
     settings: &IdeSettings,
 ) -> (helix_term::config::Config, Option<SharedString>) {
-    let global = std::fs::read_to_string(dirs.config_file()).ok();
-    let local = std::fs::read_to_string(workspace.join(".helix/config.toml")).ok();
+    let (global, local) = read_config_files(dirs, workspace);
     match keymap::build_config(settings, global.as_deref(), local.as_deref()) {
         Ok(config) => (config, None),
         Err(err) => (
@@ -366,6 +418,14 @@ fn load_config(
             Some(SharedString::from(format!("config.toml: {err}"))),
         ),
     }
+}
+
+/// The user's `config.toml` and the workspace's `.helix/config.toml`.
+fn read_config_files(dirs: &IdeDirs, workspace: &std::path::Path) -> (Option<String>, Option<String>) {
+    (
+        std::fs::read_to_string(dirs.config_file()).ok(),
+        std::fs::read_to_string(workspace.join(".helix/config.toml")).ok(),
+    )
 }
 
 fn helix_button(button: MouseButton) -> Option<HelixButton> {

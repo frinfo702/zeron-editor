@@ -21,7 +21,7 @@ use anyhow::Context as _;
 use helix_term::{
     application::{
         Application,
-        headless::{Frame as HelixFrame, Input},
+        headless::{Frame as HelixFrame, HostConfig, Input},
     },
     args::Args,
     config::Config,
@@ -65,6 +65,9 @@ pub struct HostOptions {
     /// Files to open at startup, in order.
     pub files: Vec<PathBuf>,
     pub config: Config,
+    /// Rebuilds the config on `:config-reload` and supplies the theme used
+    /// while the config names none; `None` keeps Helix's own behavior.
+    pub host_config: Option<HostConfig>,
     /// Called on the Helix thread whenever a new frame is ready. Must be cheap
     /// and must not block; it just wakes the UI.
     pub on_frame: Box<dyn Fn() + Send + Sync>,
@@ -94,11 +97,12 @@ impl HelixHost {
                     workspace,
                     files,
                     config,
+                    host_config,
                     on_frame,
                     on_exit,
                 } = options;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run(workspace, files, config, input_rx, move |frame| {
+                    run(workspace, files, config, host_config, input_rx, move |frame| {
                         *sink_frames.latest.lock().unwrap() = Some(Frame::capture(&frame));
                         on_frame();
                     })
@@ -141,6 +145,7 @@ fn run(
     workspace: PathBuf,
     files: Vec<PathBuf>,
     config: Config,
+    host_config: Option<HostConfig>,
     input: mpsc::UnboundedReceiver<Input>,
     sink: impl FnMut(HelixFrame<'_>) + Send + 'static,
 ) -> anyhow::Result<()> {
@@ -165,7 +170,14 @@ fn run(
             args.files
                 .insert(file, vec![helix_core::Position::default()]);
         }
+        let themed = config.theme.is_some();
         let mut app = Application::new(args, config, lang_loader).context("start helix")?;
+        if let Some(host) = host_config {
+            if !themed {
+                app.editor.set_theme((host.default_theme)());
+            }
+            app.set_host_config(host);
+        }
         app.set_frame_sink(Box::new(sink));
         let mut input = UnboundedReceiverStream::new(input);
         app.run_headless(&mut input).await;

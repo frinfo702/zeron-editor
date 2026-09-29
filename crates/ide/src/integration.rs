@@ -1,6 +1,7 @@
 //! Registration with the Zeron shell ([`zeron_ui::ide`]).
 
 use std::{
+    cell::RefCell,
     path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -27,10 +28,17 @@ pub fn init(data_dir: &std::path::Path, cx: &mut App) {
         installing: Arc::new(Mutex::new(None)),
     });
     let factory_dirs = dirs.clone();
+    // Helix's event registry and cwd are process-global: one Application per
+    // process, created on first use and re-pointed for every later request.
+    let editor: Rc<RefCell<Option<Entity<HelixEditor>>>> = Rc::default();
     ide::register(
         Rc::new(move |request: IdeRequest, window: &mut Window, cx: &mut App| {
+            if let Some(editor) = editor.borrow().clone() {
+                editor.update(cx, |editor, cx| editor.set_workspace(request.workspace, cx));
+                return Rc::new(Handle(editor)) as Rc<dyn IdeEditor>;
+            }
             let dirs = factory_dirs.clone();
-            let editor = cx.new(|cx| {
+            let created = cx.new(|cx| {
                 HelixEditor::new(
                     EditorOptions {
                         dirs,
@@ -42,7 +50,8 @@ pub fn init(data_dir: &std::path::Path, cx: &mut App) {
                     cx,
                 )
             });
-            Rc::new(Handle(editor)) as Rc<dyn IdeEditor>
+            *editor.borrow_mut() = Some(created.clone());
+            Rc::new(Handle(created)) as Rc<dyn IdeEditor>
         }),
         services,
         cx,
@@ -62,6 +71,18 @@ impl IdeEditor for Handle {
 
     fn open(&self, path: PathBuf, cx: &mut App) {
         self.0.read(cx).open(path);
+    }
+
+    fn set_workspace(&self, workspace: PathBuf, cx: &mut App) {
+        self.0
+            .update(cx, |editor, cx| editor.set_workspace(workspace, cx));
+    }
+
+    fn reload_config(&self, cx: &mut App) {
+        self.0.update(cx, |editor, cx| {
+            let settings = editor.settings().clone();
+            editor.apply_settings(settings, cx);
+        });
     }
 
     fn apply_settings(&self, settings: &IdeSettings, cx: &mut App) {

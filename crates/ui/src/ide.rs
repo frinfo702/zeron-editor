@@ -3,8 +3,10 @@
 //! The editor itself lives in the `zeron-ide` crate (Helix painted with
 //! gpui), which depends on this crate for theme and chrome — so this crate
 //! cannot name it. Instead `zeron-ide` registers an [`IdeFactory`] at boot and
-//! the shell asks the registry for an editor per local workspace folder. With
-//! nothing registered (fixtures, tests) IDE mode is simply unavailable.
+//! the shell asks the registry for the editor, pointed at a local folder.
+//! Helix's state is process-global, so there is one editor per process that
+//! follows the active session. With nothing registered (fixtures, tests) IDE
+//! mode is simply unavailable.
 
 use std::{path::PathBuf, rc::Rc};
 
@@ -87,7 +89,9 @@ impl Default for IdeSettings {
     }
 }
 
-/// What the shell asks the factory for.
+/// What the shell asks the factory for. The factory may hand back the same
+/// editor for every request (Helix runs once per process), re-pointed at
+/// `workspace`.
 #[derive(Debug, Clone)]
 pub struct IdeRequest {
     /// Local folder the editor treats as its workspace.
@@ -101,6 +105,11 @@ pub trait IdeEditor {
     fn focus_handle(&self, cx: &App) -> FocusHandle;
     /// Open `path` in the editor.
     fn open(&self, path: PathBuf, cx: &mut App);
+    /// Make `workspace` the editor's folder (pickers, search, new language
+    /// servers); buffers from the previous folder stay open.
+    fn set_workspace(&self, workspace: PathBuf, cx: &mut App);
+    /// Re-read `config.toml` and `languages.toml`.
+    fn reload_config(&self, cx: &mut App);
     /// Apply changed settings live (keymap, gutter, wrapping).
     fn apply_settings(&self, settings: &IdeSettings, cx: &mut App);
     /// The editor quit (`:q`) or failed and should be recreated on next use.

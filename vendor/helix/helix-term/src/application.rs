@@ -75,6 +75,8 @@ pub struct Application {
 
     #[cfg(feature = "headless")]
     frame_sink: Option<headless::FrameSink>,
+    #[cfg(feature = "headless")]
+    host_config: Option<headless::HostConfig>,
 }
 
 #[cfg(feature = "integration")]
@@ -255,6 +257,8 @@ impl Application {
             lsp_progress: LspProgressMap::new(),
             #[cfg(feature = "headless")]
             frame_sink: None,
+            #[cfg(feature = "headless")]
+            host_config: None,
         };
 
         Ok(app)
@@ -412,8 +416,17 @@ impl Application {
 
     fn refresh_config(&mut self) {
         let mut refresh_config = || -> Result<(), Error> {
-            let default_config = Config::load_default()
-                .map_err(|err| anyhow::anyhow!("Failed to load config: {}", err))?;
+            // zeron: a headless host layers its own keymap and options over
+            // the files, so it builds the config itself.
+            #[cfg(feature = "headless")]
+            let loaded = match &self.host_config {
+                Some(host) => (host.load)(),
+                None => Config::load_default(),
+            };
+            #[cfg(not(feature = "headless"))]
+            let loaded = Config::load_default();
+            let default_config =
+                loaded.map_err(|err| anyhow::anyhow!("Failed to load config: {}", err))?;
 
             // Update the syntax language loader before setting the theme. Setting the theme will
             // call `Loader::set_scopes` which must be done before the documents are re-parsed for
@@ -421,6 +434,13 @@ impl Application {
             let lang_loader = helix_core::config::user_lang_loader()?;
             self.editor.syn_loader.store(Arc::new(lang_loader));
             Self::load_configured_theme(&mut self.editor, &default_config);
+            // zeron: with no `theme` set, the host's theme, not Helix's default.
+            #[cfg(feature = "headless")]
+            if default_config.theme.is_none() {
+                if let Some(host) = &self.host_config {
+                    self.editor.set_theme((host.default_theme)());
+                }
+            }
 
             // Re-parse any open documents with the new language config.
             let lang_loader = self.editor.syn_loader.load();
@@ -1217,6 +1237,14 @@ pub mod headless {
 
     pub type FrameSink = Box<dyn FnMut(Frame<'_>) + Send>;
 
+    /// How a host rebuilds the config on `:config-reload` (and
+    /// [`Application::reload_config`]) instead of reading `config.toml`.
+    pub struct HostConfig {
+        pub load: Box<dyn Fn() -> Result<Config, crate::config::ConfigLoadError> + Send>,
+        /// Theme used while the config names none.
+        pub default_theme: Box<dyn Fn() -> theme::Theme + Send>,
+    }
+
     /// Work the host queues onto the Helix thread.
     pub enum Input {
         /// A key, mouse, paste, focus or resize event.
@@ -1230,22 +1258,13 @@ pub mod headless {
             self.frame_sink = Some(sink);
         }
 
-        /// Re-read config.toml / languages.toml from disk (`:config-reload`).
-        pub fn reload_config(&mut self) {
-            self.refresh_config();
+        pub fn set_host_config(&mut self, host: HostConfig) {
+            self.host_config = Some(host);
         }
 
-        /// Swap in a host-built config (keymap and editor options) live, the
-        /// way `:config-reload` applies a re-read file.
-        pub fn replace_config(&mut self, config: Config) {
-            let old_editor_config = self.editor.config();
-            self.config.store(Arc::new(config));
-            self.editor.refresh_config(&old_editor_config);
-            let scrolloff = self.editor.config().scrolloff;
-            for (view, _) in self.editor.tree.views() {
-                let doc = doc_mut!(self.editor, &view.doc);
-                view.ensure_cursor_in_view(doc, scrolloff);
-            }
+        /// Rebuild the config and re-read languages.toml (`:config-reload`).
+        pub fn reload_config(&mut self) {
+            self.handle_config_events(ConfigEvent::Refresh);
         }
 
         /// Force a frame out to the sink.
@@ -1278,8 +1297,8 @@ pub mod headless {
         }
 
         /// The terminal event loop with host input in place of crossterm.
-        /// Returns when the editor quits or the input stream ends; the
-        /// caller then runs [`Application::close`].
+        /// Returns when the input stream ends (the editor itself never
+        /// quits); the caller then runs [`Application::close`].
         pub async fn run_headless<S>(&mut self, input: &mut S)
         where
             S: Stream<Item = Input> + Unpin,
@@ -1288,8 +1307,12 @@ pub mod headless {
 
             self.render().await;
             loop {
+                // Helix state is process-global (event registry, cwd), so a
+                // host keeps one Application alive: closing the last view
+                // leaves a scratch buffer instead of exiting.
                 if self.editor.should_close() {
-                    return;
+                    self.editor.new_file(helix_view::editor::Action::VerticalSplit);
+                    self.render().await;
                 }
                 tokio::select! {
                     biased;

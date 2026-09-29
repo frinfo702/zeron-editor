@@ -1805,8 +1805,8 @@ pub struct Shell {
     /// One independent editor per opened workspace file. IDs are global
     /// while the lookup key keeps a file tab scoped to its chat panel.
     file_surfaces: std::collections::HashMap<u64, Entity<FilesSurface>>,
-    /// IDE mode editors, one per local workspace folder (see `ide_mode`).
-    ide_editors: std::collections::HashMap<PathBuf, std::rc::Rc<dyn crate::ide::IdeEditor>>,
+    /// The IDE mode editor and the folder it currently shows (see `ide_mode`).
+    ide_editor: Option<(PathBuf, std::rc::Rc<dyn crate::ide::IdeEditor>)>,
     /// Folder IDE mode shows instead of the session's (Helix config files).
     ide_workspace_override: Option<PathBuf>,
     file_surface_paths: std::collections::HashMap<u64, String>,
@@ -2264,7 +2264,7 @@ impl Shell {
             files: std::collections::HashMap::new(),
             files_subs: std::collections::HashMap::new(),
             file_surfaces: std::collections::HashMap::new(),
-            ide_editors: std::collections::HashMap::new(),
+            ide_editor: None,
             ide_workspace_override: None,
             file_surface_paths: std::collections::HashMap::new(),
             file_surface_keys: std::collections::HashMap::new(),

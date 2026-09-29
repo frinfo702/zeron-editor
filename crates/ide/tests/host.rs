@@ -34,6 +34,7 @@ fn edits_and_saves_a_file_through_the_host() {
         workspace: workspace.path().to_path_buf(),
         files: vec![file.clone()],
         config: Default::default(),
+        host_config: None,
         on_frame: Box::new(|| {}),
         on_exit: Box::new(move |err| {
             let _ = exit_tx.send(err.map(|err| err.to_string()));
@@ -59,10 +60,21 @@ fn edits_and_saves_a_file_through_the_host() {
         std::fs::read_to_string(&file).unwrap() == "hello world\n"
     });
 
-    // `:q` ends the event loop and runs the exit hook with no error.
+    // `:q` on the last view keeps Helix alive with a scratch buffer: Helix
+    // state is process-global, so a host never lets its Application exit.
     host.send(key(":"));
     host.send(key("q"));
     host.send(key("ret"));
+    let mut screen = String::new();
+    wait_until("scratch buffer", || {
+        if let Some(frame) = host.take_frame() {
+            screen = frame.buffer.content.iter().map(|c| c.symbol.as_str()).collect();
+        }
+        screen.contains("[scratch]")
+    });
+    assert!(exit_rx.try_recv().is_err(), "helix exited on :q");
+    // Dropping the host ends the loop; the exit hook reports a clean close.
+    drop(host);
     let exit = exit_rx.recv_timeout(Duration::from_secs(20)).unwrap();
     assert_eq!(exit, None);
     // The process-wide cwd is the host's, not the workspace Helix opened.

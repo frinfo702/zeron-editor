@@ -3,10 +3,11 @@
 //! a file opened from the files panel lands in the editor instead of a file
 //! tab while IDE mode is showing.
 //!
-//! Editors are created through [`crate::ide`]'s registry (the `zeron-ide`
-//! crate registers the Helix one) and kept one per workspace folder, so
-//! hopping between sessions in different folders keeps each editor's buffers,
-//! history and language servers alive.
+//! The editor comes from [`crate::ide`]'s registry (the `zeron-ide` crate
+//! registers the Helix one). There is a single editor — Helix's state is
+//! process-global — that follows the active session's folder: switching
+//! sessions re-points it, and buffers and language servers from the previous
+//! folder stay alive.
 
 use std::{path::PathBuf, rc::Rc};
 
@@ -120,9 +121,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Result<Rc<dyn IdeEditor>, IdeUnavailable> {
         let workspace = self.ide_workspace(cx)?;
-        if let Some(editor) = self.ide_editors.get(&workspace)
+        if let Some((current, editor)) = &mut self.ide_editor
             && !editor.is_closed(cx)
         {
+            if *current != workspace {
+                editor.set_workspace(workspace.clone(), cx);
+                *current = workspace;
+            }
             return Ok(editor.clone());
         }
         let request = IdeRequest {
@@ -130,7 +135,7 @@ impl Shell {
             settings: self.settings.ide.clone(),
         };
         let editor = ide::create(request, window, cx).ok_or(IdeUnavailable::NoWorkspace)?;
-        self.ide_editors.insert(workspace, editor.clone());
+        self.ide_editor = Some((workspace, editor.clone()));
         Ok(editor)
     }
 
@@ -180,7 +185,7 @@ impl Shell {
             return;
         }
         self.settings.ide = current.clone();
-        for editor in self.ide_editors.values() {
+        if let Some((_, editor)) = &self.ide_editor {
             editor.apply_settings(&current, cx);
         }
     }
