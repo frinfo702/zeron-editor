@@ -46,8 +46,17 @@ pub struct MenuView {
     pub scroll: usize,
 }
 
+/// A documentation popup (hover, completion docs) as it last rendered.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DocView {
+    pub area: Rect,
+    /// The Markdown source Helix renders.
+    pub markdown: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostView {
     Picker(PickerView),
     Menu(MenuView),
+    Doc(DocView),
 }

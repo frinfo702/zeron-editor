@@ -1323,8 +1323,11 @@ impl EditorView {
 impl Component for EditorView {
     // zeron: the completion menu lives inside the editor view, not in its
     // own layer; report it to a host.
-    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
-        self.completion.as_ref().and_then(|completion| completion.host_view())
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        self.completion
+            .as_ref()
+            .map(|completion| completion.host_views())
+            .unwrap_or_default()
     }
 
     fn handle_event(

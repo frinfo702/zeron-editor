@@ -251,8 +251,14 @@ impl<T: Component> Popup<T> {
 
 impl<T: Component> Component for Popup<T> {
     // zeron: a popup reports what it holds (a menu, …) to a host.
-    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
-        self.contents.host_view()
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        let mut views = self.contents.host_views();
+        for view in &mut views {
+            if let crate::ui::host_view::HostView::Doc(doc) = view {
+                doc.area = self.area;
+            }
+        }
+        views
     }
 
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {

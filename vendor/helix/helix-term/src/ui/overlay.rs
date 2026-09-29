@@ -75,7 +75,7 @@ impl<T: Component + 'static> Component for Overlay<T> {
     }
 
     // zeron: an overlaid picker still reports itself to a host.
-    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
-        self.content.host_view()
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        self.content.host_views()
     }
 }

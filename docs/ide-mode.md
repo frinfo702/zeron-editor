@@ -57,6 +57,10 @@ that runs on another device shows an explanation instead of an editor.
   layer). They paint as a card of their own: labels in the code font, kind /
   detail muted, a rounded selection and a thin scrollbar. Clicks select and
   accept a row.
+- **Native docs popups.** Hover docs and completion docs report their
+  Markdown and area (`DocView`); the view lays a frosted Zeron card over
+  those cells and renders the Markdown with Zeron's own renderer (single
+  newlines kept as breaks, as Helix shows them).
 - **Native info box.** The pending-keys box ("which key") is read from
   `editor.autoinfo` and laid out where Helix puts it: its title, then each
   key as a small key cap beside its description. The message line's echo of
@@ -142,11 +146,11 @@ borrows compiled grammars from an existing Helix install.
 
 ## Not done yet
 
-- **Hover / signature / completion docs and the command line are
-  restyled, not rebuilt.** They render as Zeron cards with Helix's cell
-  layout inside. Pickers and menus are native (below); the same
-  `host_view` hook in `helix-term` is how the rest would follow. The picker
-  preview pane is still Helix's grid.
+- **Signature help and the command line's completions are restyled, not
+  rebuilt.** They render as Zeron cards with Helix's cell layout inside; the
+  same `host_views` hook in `helix-term` is how they would follow. The
+  picker preview pane is still Helix's grid, and code blocks in Markdown
+  docs are not syntax-highlighted yet.
 - **Off macOS, most Ctrl chords go to the editor** while it has focus, so
   Zeron's other `Mod` shortcuts (Ctrl there) are shadowed. The Agent/IDE
   switch and the sidebar, terminal, files and changes toggles always pass

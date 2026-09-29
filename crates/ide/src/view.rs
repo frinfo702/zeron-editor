@@ -85,6 +85,8 @@ pub struct HelixEditor {
     /// Config problems (bad `config.toml`) shown over a running editor.
     config_error: Option<SharedString>,
     geometry: Option<Geometry>,
+    /// Window position of the grid element, for overlays placed over cells.
+    grid_origin: Point<Pixels>,
     /// Grid size last sent to Helix.
     sent_grid: Option<(u16, u16)>,
     drag_button: Option<HelixButton>,
@@ -222,6 +224,7 @@ impl HelixEditor {
             status,
             config_error,
             geometry: None,
+            grid_origin: Point::default(),
             sent_grid: None,
             drag_button: None,
             scroll_carry: 0.0,
@@ -345,8 +348,9 @@ impl HelixEditor {
         }
     }
 
-    fn on_geometry(&mut self, geometry: Geometry) {
+    fn on_geometry(&mut self, geometry: Geometry, grid_origin: Point<Pixels>) {
         self.geometry = Some(geometry);
+        self.grid_origin = grid_origin;
         // One row more than fits: Helix's message line, drawn only on demand.
         let grid = (geometry.cols, geometry.rows + 1);
         if self.sent_grid != Some(grid) {
@@ -498,6 +502,29 @@ impl HelixEditor {
             self.send_mouse(kind, event.position, &event.modifiers);
         }
     }
+}
+
+/// Helix shows every newline in its docs popups as a line break (paths,
+/// `type:` / `permissions:` rows, manually wrapped doc comments); CommonMark
+/// joins single newlines into one paragraph. Make them hard breaks outside
+/// code fences so the Markdown card reads like Helix's.
+fn hard_breaks(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len() + 16);
+    let mut in_fence = false;
+    let lines: Vec<&str> = markdown.lines().collect();
+    for (ix, line) in lines.iter().enumerate() {
+        let fence = line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~");
+        if fence {
+            in_fence = !in_fence;
+        }
+        out.push_str(line);
+        let next_blank = lines.get(ix + 1).is_none_or(|next| next.trim().is_empty());
+        if !in_fence && !fence && !line.trim().is_empty() && !next_blank {
+            out.push('\\');
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// The layered config for `settings`; a bad `config.toml` falls back to the
@@ -667,7 +694,7 @@ impl Focusable for HelixEditor {
 }
 
 impl Render for HelixEditor {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let banner = match (&self.status, &self.config_error) {
             (EditorStatus::Exited(Some(err)), _) => Some((err.clone(), theme.danger)),
@@ -692,7 +719,8 @@ impl Render for HelixEditor {
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .child(HelixGrid {
                 editor: cx.entity(),
-            });
+            })
+            .children(self.render_docs(&theme, window));
         div()
             .id("helix-editor")
             .key_context(KEY_CONTEXT)
@@ -726,6 +754,66 @@ impl Render for HelixEditor {
 }
 
 impl HelixEditor {
+    /// Helix's documentation popups (hover, completion docs) as Zeron
+    /// Markdown cards, placed over the cells Helix gave them.
+    fn render_docs(&self, theme: &Theme, window: &Window) -> Vec<gpui::AnyElement> {
+        let (Some(frame), Some(g)) = (self.frame.as_ref(), self.geometry) else {
+            return Vec::new();
+        };
+        frame
+            .docs
+            .iter()
+            .enumerate()
+            .map(|(ix, doc)| {
+                let a = doc.area;
+                let first = g.helix_cell(a.x as usize, a.y as usize);
+                let last = g.helix_cell(
+                    (a.x + a.width).saturating_sub(1) as usize,
+                    (a.y + a.height).saturating_sub(1) as usize,
+                );
+                let origin = first.origin - self.grid_origin;
+                let size = last.origin + point(g.cell_w, g.line_h) - first.origin;
+                let tree = zeron_markdown::parse_full(&hard_breaks(&doc.markdown));
+                let opts = zeron_ui::markdown::render::RenderOptions::settled(
+                    format!("helix-doc-{ix}").into(),
+                );
+                let body =
+                    zeron_ui::markdown::render::render_tree(&tree, &opts, theme, window, &|_| None);
+                let fill = if theme.is_frost() {
+                    theme.glass_overlay()
+                } else {
+                    theme.surface_dialog
+                };
+                div()
+                    .absolute()
+                    .left(origin.x)
+                    .top(origin.y)
+                    .w(size.x)
+                    .h(size.y)
+                    .occlude()
+                    .child(zeron_ui::frost::frosted(
+                        Theme::PANEL_RADIUS,
+                        zeron_ui::frost::MENU_BLUR,
+                        div()
+                            .id(("helix-doc", ix))
+                            .size_full()
+                            .rounded(px(Theme::PANEL_RADIUS))
+                            .bg(fill)
+                            .border_1()
+                            .border_color(theme.border)
+                            .shadow_md()
+                            .px(px(12.0))
+                            .py(px(8.0))
+                            .overflow_y_scroll()
+                            .text_size(px(13.0))
+                            .text_color(theme.text)
+                            .child(body),
+                    ))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     /// The open-buffer tab strip: Zeron chrome over Helix's buffer list.
     /// Hidden while the only buffer is an untouched scratch buffer.
     fn render_tabs(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -898,7 +986,7 @@ impl Element for HelixGrid {
             prompt,
         };
         let (frame, focused, focus, marked, modeless) = self.editor.update(cx, |editor, _| {
-            editor.on_geometry(geometry);
+            editor.on_geometry(geometry, bounds.origin);
             (
                 editor.frame.clone(),
                 editor.focus.is_focused(window),
@@ -951,6 +1039,19 @@ impl Element for HelixGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_newlines_become_hard_breaks_outside_fences() {
+        assert_eq!(
+            hard_breaks("type: file\npath: x"),
+            "type: file\\\npath: x\n"
+        );
+        assert_eq!(hard_breaks("a\n\nb"), "a\n\nb\n");
+        assert_eq!(
+            hard_breaks("```rust\nfn a()\nfn b()\n```\ndoc"),
+            "```rust\nfn a()\nfn b()\n```\ndoc\n"
+        );
+    }
 
     #[test]
     fn utf16_ranges_map_onto_composition_bytes() {

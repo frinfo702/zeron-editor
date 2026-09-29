@@ -211,8 +211,8 @@ use super::PromptEvent as MenuEvent;
 
 impl<T: Item + 'static> Component for Menu<T> {
     // zeron: see ui/host_view.rs.
-    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
-        Some(crate::ui::host_view::HostView::Menu(self.host_view.clone()))
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        vec![crate::ui::host_view::HostView::Menu(self.host_view.clone())]
     }
 
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {

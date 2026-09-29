@@ -580,6 +580,9 @@ pub(crate) fn paint_frame(
     let native_picker = frame.picker.as_ref().map(crate::picker::inner);
     let native_menu = frame.menu.as_ref().map(|menu| menu.area);
     let native_info = frame.info.as_ref().map(|info| info.area);
+    // Docs popups are drawn by the view as Markdown overlays: blank here.
+    let native_docs: Vec<helix_view::graphics::Rect> =
+        frame.docs.iter().map(|doc| doc.area).collect();
     let contains = |rect: helix_view::graphics::Rect, col: usize, row: usize| {
         (rect.x as usize..(rect.x + rect.width) as usize).contains(&col)
             && (rect.y as usize..(rect.y + rect.height) as usize).contains(&row)
@@ -615,8 +618,17 @@ pub(crate) fn paint_frame(
         })
         .filter(|rect| rect.col1 < cols && rect.row1 < rows)
         .collect();
+    let in_doc = |col: usize, row: usize| {
+        frame.docs.iter().any(|doc| {
+            let a = doc.area;
+            (a.x as usize..(a.x + a.width) as usize).contains(&col)
+                && (a.y as usize..(a.y + a.height) as usize).contains(&row)
+        })
+    };
     let mut rects = find_cards(cols, rows, |col, row| {
-        is_overlay(col, row) && !known.iter().any(|rect| rect.contains(col, row))
+        is_overlay(col, row)
+            && !known.iter().any(|rect| rect.contains(col, row))
+            && !in_doc(col, row)
     });
     let first_known = rects.len();
     rects.extend(known);
@@ -694,6 +706,7 @@ pub(crate) fn paint_frame(
                 if native_picker.is_some_and(|inner| contains(inner, col, row))
                     || native_menu.is_some_and(|area| contains(area, col, row))
                     || native_info.is_some_and(|area| contains(area, col, row))
+                    || native_docs.iter().any(|&area| contains(area, col, row))
                 {
                     paint.bg = None;
                     paint.hidden = true;

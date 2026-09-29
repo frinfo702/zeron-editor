@@ -13843,6 +13843,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tree-sitter",
+ "zeron-markdown",
  "zeron-proto",
  "zeron-syntax",
  "zeron-theme",

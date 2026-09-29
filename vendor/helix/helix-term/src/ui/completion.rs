@@ -124,6 +124,8 @@ pub struct Completion {
     filter: String,
     // TODO: move to helix-view/central handler struct in the future
     resolve_handler: ResolveHandler,
+    /// zeron: the docs beside the menu as last rendered, for a host.
+    host_doc: Option<crate::ui::host_view::DocView>,
 }
 
 impl Completion {
@@ -312,6 +314,7 @@ impl Completion {
             // and avoid allocation during matching
             filter: String::from(fragment),
             resolve_handler: ResolveHandler::new(),
+            host_doc: None,
         };
 
         // need to recompute immediately in case start_offset != trigger_offset
@@ -459,8 +462,14 @@ impl Completion {
 
 impl Component for Completion {
     // zeron: the completion list, for a host drawing it natively.
-    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
-        self.popup.host_view()
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        let mut views = self.popup.host_views();
+        views.extend(
+            self.host_doc
+                .clone()
+                .map(crate::ui::host_view::HostView::Doc),
+        );
+        views
     }
 
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
@@ -473,6 +482,8 @@ impl Component for Completion {
 
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         self.popup.render(area, surface, cx);
+        // zeron: cleared here, set once the docs have a place.
+        self.host_doc = None;
 
         // if we have a selection, render a markdown popup on top/below with info
         let option = match self.popup.contents_mut().selection_mut() {
@@ -571,6 +582,12 @@ impl Component for Completion {
 
             Rect::new(0, y, area.width, avail_height.min(15))
         };
+
+        // zeron: publish the docs for a host.
+        self.host_doc = Some(crate::ui::host_view::DocView {
+            area: doc_area,
+            markdown: markdown_doc.contents().to_string(),
+        });
 
         // clear area
         let background = cx.editor.theme.get("ui.popup");

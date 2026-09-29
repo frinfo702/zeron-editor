@@ -74,9 +74,10 @@ pub trait Component: Any + AnyComponent {
         None
     }
 
-    /// zeron: the state a host needs to draw this component itself.
-    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
-        None
+    /// zeron: the state a host needs to draw this component itself (a
+    /// component may hold several: a completion menu and its docs).
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        Vec::new()
     }
 }
 
@@ -198,7 +199,10 @@ impl Compositor {
 
     /// zeron: the host views of all layers, bottom to top.
     pub fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
-        self.layers.iter().filter_map(|layer| layer.host_view()).collect()
+        self.layers
+            .iter()
+            .flat_map(|layer| layer.host_views())
+            .collect()
     }
 
     /// zeron: the type name of the front-most layer, for a host that needs

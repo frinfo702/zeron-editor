@@ -365,7 +365,24 @@ impl Markdown {
     }
 }
 
+impl Markdown {
+    /// zeron: the Markdown source, for a host drawing it natively.
+    pub fn contents(&self) -> &str {
+        &self.contents
+    }
+}
+
 impl Component for Markdown {
+    // zeron: see ui/host_view.rs. The popup holding it fills in the area.
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        vec![crate::ui::host_view::HostView::Doc(
+            crate::ui::host_view::DocView {
+                area: Default::default(),
+                markdown: self.contents.clone(),
+            },
+        )]
+    }
+
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         use tui::widgets::{Paragraph, Widget, Wrap};
 

@@ -51,3 +51,7 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
 - `Menu` records a `MenuView` while rendering; `Popup`, `Completion` and
   `EditorView` (which owns the completion, outside the layer stack) forward
   it.
+- `Component::host_views` returns every view a component holds: `Markdown`
+  reports its source, `Popup` sets a doc's area to its own, and `Completion`
+  records the docs it renders beside its menu (`contents()` added to
+  `Markdown`).
