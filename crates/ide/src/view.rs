@@ -402,7 +402,7 @@ impl HelixEditor {
     ) -> Option<(crate::host::PickerView, crate::picker::Hit)> {
         let view = self.frame.as_ref()?.picker.clone()?;
         let cell = self.cell_at(position)?;
-        crate::picker::hit(&view, cell).map(|hit| (view, hit))
+        crate::picker::hit(&view, &self.geometry?, cell, position.y).map(|hit| (view, hit))
     }
 
     fn menu_hit(&self, position: Point<Pixels>) -> Option<(crate::host::MenuView, Option<usize>)> {

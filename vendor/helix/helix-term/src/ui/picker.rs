@@ -738,7 +738,9 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         // -- Render the contents:
         // subtract area of prompt from top
         let inner = inner.clip_top(2);
-        let rows = inner.height.saturating_sub(self.header_height()) as u32;
+        // zeron: a host may draw items taller than one grid row.
+        let rows = crate::ui::host_view::picker_rows(inner.height.saturating_sub(self.header_height()))
+            as u32;
         let offset = self.cursor - (self.cursor % std::cmp::max(1, rows));
         let cursor = self.cursor.saturating_sub(offset);
         let end = offset
@@ -1251,7 +1253,8 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
     }
 
     fn required_size(&mut self, (width, height): (u16, u16)) -> Option<(u16, u16)> {
-        self.completion_height = height.saturating_sub(4 + self.header_height());
+        self.completion_height =
+            crate::ui::host_view::picker_rows(height.saturating_sub(4 + self.header_height()));
         Some((width, height))
     }
 

@@ -5,6 +5,26 @@
 
 use helix_view::graphics::{Rect, Style};
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// How many grid rows one picker item takes (a host drawing taller rows);
+/// f32 bits, 1.0 by default.
+static PICKER_ROW_SCALE: AtomicU32 = AtomicU32::new(0x3f80_0000);
+
+/// Lay out picker items `scale` grid rows apart (at least 1).
+pub fn set_picker_row_scale(scale: f32) {
+    PICKER_ROW_SCALE.store(scale.max(1.0).to_bits(), Ordering::Relaxed);
+}
+
+pub fn picker_row_scale() -> f32 {
+    f32::from_bits(PICKER_ROW_SCALE.load(Ordering::Relaxed))
+}
+
+/// Picker items that fit in `height` grid rows.
+pub fn picker_rows(height: u16) -> u16 {
+    (height as f32 / picker_row_scale()).floor() as u16
+}
+
 /// One styled run of text in a cell.
 pub type HostSpan = (String, Style);
 

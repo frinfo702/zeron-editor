@@ -49,8 +49,10 @@ that runs on another device shows an explanation instead of an editor.
 - **Native pickers.** Helix records each picker render (`ui/host_view.rs`
   in `helix-term`: query, counts, the rows on screen with match highlights,
   pane areas). The painter leaves the list pane blank and `picker.rs` draws
-  it with the UI font: a search field, `name  dir/` file rows, measured
-  columns for tables, a rounded selection. Keys still go to Helix; clicks
+  it with the UI font: a two-row search field, `name  dir/` file rows
+  1.5 code lines tall (`picker::ROW_SCALE`; Helix lays out and pages the
+  list at the same scale), measured columns for tables, a neutral rounded
+  selection. Keys still go to Helix; clicks
   and the wheel become arrow keys and Enter.
 - **Native menus.** Completion (and other) menus record the same way
   (`MenuView`; the editor view reports its completion, which is not a

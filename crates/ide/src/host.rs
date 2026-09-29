@@ -367,6 +367,7 @@ fn run(
                 .insert(file, vec![helix_core::Position::default()]);
         }
         let themed = config.theme.is_some();
+        helix_term::ui::host_view::set_picker_row_scale(crate::picker::ROW_SCALE);
         let mut app = Application::new(args, config, lang_loader).context("start helix")?;
         if let Some(host) = host_config {
             if !themed {

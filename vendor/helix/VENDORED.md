@@ -61,3 +61,6 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
 - `Picker` records a `PreviewView` (title, path, line range, and whether the
   body is code, a directory listing or a message). The preview gains a
   title row: the previewed path, above the code.
+- `host_view::set_picker_row_scale`: a host that draws picker items taller
+  than one grid row sets the scale, and `Picker` lays out (and pages) that
+  many fewer items.

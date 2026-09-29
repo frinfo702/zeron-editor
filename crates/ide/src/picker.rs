@@ -24,8 +24,23 @@ use crate::{
     theme,
 };
 
-/// UI text size for picker rows.
+/// UI text size for menus, the prompt grid and the info box.
 const TEXT_SIZE: f32 = 13.0;
+/// UI text size for picker rows and the search field.
+const LIST_TEXT_SIZE: f32 = 14.0;
+/// Grid rows per picker item: items are taller than a code line, like a
+/// native list. Helix lays the list out with the same scale.
+pub const ROW_SCALE: f32 = 1.5;
+
+/// Height of one picker item.
+fn row_pitch(g: &Geometry) -> Pixels {
+    g.line_h * ROW_SCALE
+}
+
+/// Top of picker item `index`.
+fn row_top(view: &PickerView, g: &Geometry, index: usize) -> Pixels {
+    g.helix_cell(0, first_row(view) as usize).origin.y + row_pitch(g) * index as f32
+}
 /// Horizontal padding inside the list pane.
 const PAD_X: f32 = 10.0;
 /// Gap between measured columns.
@@ -57,7 +72,7 @@ pub enum Hit {
     Pane,
 }
 
-pub fn hit(view: &PickerView, (col, row): (u16, u16)) -> Option<Hit> {
+pub fn hit(view: &PickerView, g: &Geometry, (col, row): (u16, u16), y: Pixels) -> Option<Hit> {
     let inner = inner(view);
     let inside = col >= inner.x
         && col < inner.x + inner.width
@@ -66,10 +81,15 @@ pub fn hit(view: &PickerView, (col, row): (u16, u16)) -> Option<Hit> {
     if !inside {
         return None;
     }
-    let first = first_row(view);
-    Some(match row.checked_sub(first) {
-        Some(index) if (index as usize) < view.rows.len() => Hit::Row(index as usize),
-        _ => Hit::Pane,
+    let top = row_top(view, g, 0);
+    if y < top {
+        return Some(Hit::Pane);
+    }
+    let index = ((y - top) / row_pitch(g)).floor() as usize;
+    Some(if index < view.rows.len() {
+        Hit::Row(index)
+    } else {
+        Hit::Pane
     })
 }
 
@@ -88,13 +108,14 @@ struct Painter<'a> {
     theme: &'a Theme,
     window: &'a Window,
     font: gpui::Font,
+    size: f32,
 }
 
 impl Painter<'_> {
     fn shape(&self, text: &str, runs: &[TextRun]) -> ShapedLine {
         self.window.text_system().shape_line(
             SharedString::from(text.to_string()),
-            px(TEXT_SIZE),
+            px(self.size),
             runs,
             None,
         )
@@ -209,6 +230,7 @@ pub(crate) fn paint_preview(
         theme,
         window,
         font: gpui::font(theme.font_sans.clone()),
+        size: TEXT_SIZE,
     };
     let left_cell = g.helix_cell(inner.x as usize, inner.y as usize);
     let right_cell = g.helix_cell((inner.x + inner.width - 1) as usize, inner.y as usize);
@@ -320,6 +342,7 @@ pub(crate) fn paint(
         theme,
         window,
         font: gpui::font(theme.font_sans.clone()),
+        size: LIST_TEXT_SIZE,
     };
     let left_cell = g.helix_cell(inner.x as usize, inner.y as usize);
     let right_cell = g.helix_cell((inner.x + inner.width - 1) as usize, inner.y as usize);
@@ -328,14 +351,21 @@ pub(crate) fn paint(
         right_cell.origin.x + g.cell_w - px(PAD_X),
     );
 
-    // -- Search field: query with caret, placeholder, count.
-    let query_row = inner.y;
-    let query_origin = p.row_origin(left, query_row);
+    // -- Search field: the prompt's row and the one below it, a hairline
+    // under both; the query, caret and count are centered in it.
+    let field_top = g.helix_cell(0, inner.y as usize).origin.y;
+    let separator_y = g.helix_cell(0, (inner.y + 2) as usize).origin.y - px(4.0);
+    let text_y = ((field_top + separator_y - g.line_h) / 2.0).round();
+    let query_origin = point(left, text_y);
     if view.query.is_empty() {
-        let placeholder = if view.files { "Search files" } else { "Search" };
+        let placeholder = if view.files {
+            "Search files…"
+        } else {
+            "Search…"
+        };
         let run = p.run(placeholder.len(), theme.text_faint, FontWeight::NORMAL);
         // Clear of the caret, which sits at the start of the empty field.
-        let origin = query_origin + point(px(6.0), px(0.0));
+        let origin = query_origin + point(px(4.0), px(0.0));
         layer.lines.push((origin, p.shape(placeholder, &[run])));
     } else {
         let run = p.run(view.query.len(), theme.text, FontWeight::NORMAL);
@@ -355,8 +385,8 @@ pub(crate) fn paint(
     };
     layer.quads.push(fill(
         Bounds::new(
-            point(caret_x, query_origin.y + g.line_h * 0.2),
-            size(px(2.0), g.line_h * 0.6),
+            point(caret_x, text_y + g.line_h * 0.15),
+            size(px(1.5), g.line_h * 0.7),
         ),
         theme.caret,
     ));
@@ -366,15 +396,19 @@ pub(crate) fn paint(
         view.matched,
         view.total
     );
-    let run = p.run(count.len(), theme.text_faint, FontWeight::NORMAL);
-    let count_line = p.shape(&count, &[run]);
-    layer.lines.push((
-        p.row_origin(right - count_line.width, query_row),
-        count_line,
-    ));
+    let count_line = {
+        let small = Painter {
+            size: TEXT_SIZE - 1.0,
+            font: p.font.clone(),
+            ..p
+        };
+        let run = small.run(count.len(), theme.text_faint, FontWeight::NORMAL);
+        small.shape(&count, &[run])
+    };
+    layer
+        .lines
+        .push((point(right - count_line.width, text_y), count_line));
 
-    // -- Separator under the search field.
-    let separator_y = g.helix_cell(0, (inner.y + 1) as usize).origin.y + g.line_h / 2.0;
     layer.rules.push(fill(
         Bounds::from_corners(
             point(left_cell.origin.x, separator_y),
@@ -424,30 +458,32 @@ pub(crate) fn paint(
         }
     }
 
-    // -- Rows.
-    let first = first_row(view);
+    // -- Rows, [`ROW_SCALE`] grid rows apart.
+    let pitch = row_pitch(g);
+    let pane_bottom = g
+        .helix_cell(0, (inner.y + inner.height - 1) as usize)
+        .origin
+        .y
+        + g.line_h;
     for (index, cells) in rows.iter().enumerate() {
-        let row = first + index as u16;
-        if row >= inner.y + inner.height {
+        let top = row_top(view, g, index);
+        if top + pitch > pane_bottom + px(0.5) {
             break;
         }
-        let origin_y = g.helix_cell(0, row as usize).origin.y;
+        // Text is laid out a code line tall; center it in the item.
+        let origin_y = top + (pitch - g.line_h) / 2.0;
         if index == view.selected {
             let wash = Bounds::from_corners(
-                point(left_cell.origin.x + px(4.0), origin_y + px(1.0)),
+                point(left_cell.origin.x + px(4.0), top + px(1.0)),
                 point(
                     right_cell.origin.x + g.cell_w - px(4.0),
-                    origin_y + g.line_h - px(1.0),
+                    top + pitch - px(1.0),
                 ),
             );
             layer.quads.push(quad(
                 wash,
                 Corners::all(px(Theme::CONTROL_RADIUS)),
-                theme::resolve(
-                    helix_view::graphics::Color::Indexed(theme::Token::MenuSelected.index()),
-                    theme,
-                )
-                .unwrap_or(theme.element_active),
+                zeron_ui::theme::wash(0.09),
                 px(0.0),
                 theme.element_active,
                 gpui::BorderStyle::Solid,
@@ -467,10 +503,10 @@ pub(crate) fn paint(
             layer.lines.push((point(left, origin_y), name_line));
             if !dir.is_empty() {
                 let dir = dir.trim_end_matches('/');
-                let dir_line = p.highlighted(dir, theme.text_faint, highlights, 0);
+                let dir_line = p.highlighted(dir, theme.text_muted, highlights, 0);
                 layer
                     .lines
-                    .push((point(left + name_width + px(10.0), origin_y), dir_line));
+                    .push((point(left + name_width + px(8.0), origin_y), dir_line));
             }
             continue;
         }
@@ -528,12 +564,14 @@ pub(crate) fn paint_menu(
         theme,
         window,
         font: gpui::font(theme.font_sans.clone()),
+        size: TEXT_SIZE,
     };
     let code = Painter {
         g,
         theme,
         window,
         font: crate::paint::grid_font(theme),
+        size: TEXT_SIZE,
     };
     let first = g.helix_cell(area.x as usize, area.y as usize);
     let last = g.helix_cell((area.x + area.width - 1) as usize, area.y as usize);
@@ -673,6 +711,7 @@ pub(crate) fn paint_prompt(
         theme,
         window,
         font: crate::paint::grid_font(theme),
+        size: TEXT_SIZE,
     };
     let area = view.area;
     for (ix, (text, style)) in view.items.iter().enumerate() {
@@ -737,12 +776,14 @@ pub(crate) fn paint_info(
         theme,
         window,
         font: gpui::font(theme.font_sans.clone()),
+        size: TEXT_SIZE,
     };
     let code = Painter {
         g,
         theme,
         window,
         font: crate::paint::grid_font(theme),
+        size: TEXT_SIZE,
     };
     let left = g.helix_cell(area.x as usize, area.y as usize).origin.x + px(PAD_X);
     let row_y = |row: u16| g.helix_cell(0, row as usize).origin.y;
@@ -828,12 +869,24 @@ mod tests {
     #[test]
     fn hits_rows_below_the_search_field() {
         let v = view(3, 0);
-        // Inner starts at (11, 6): prompt row 6, separator 7, items from 8.
-        assert_eq!(hit(&v, (12, 8)), Some(Hit::Row(0)));
-        assert_eq!(hit(&v, (12, 10)), Some(Hit::Row(2)));
-        assert_eq!(hit(&v, (12, 11)), Some(Hit::Pane));
-        assert_eq!(hit(&v, (12, 6)), Some(Hit::Pane));
-        assert_eq!(hit(&v, (5, 8)), None);
+        let g = Geometry {
+            origin: point(px(0.0), px(0.0)),
+            cell_w: px(8.0),
+            line_h: px(20.0),
+            cols: 80,
+            rows: 40,
+            prompt: false,
+            slack: px(0.0),
+        };
+        // Inner starts at (11, 6): the search field takes rows 6-7, items
+        // start at row 8 (y 160) and are 1.5 rows (30px) tall.
+        let y = |y: f32| px(y);
+        assert_eq!(hit(&v, &g, (12, 8), y(165.0)), Some(Hit::Row(0)));
+        assert_eq!(hit(&v, &g, (12, 9), y(195.0)), Some(Hit::Row(1)));
+        assert_eq!(hit(&v, &g, (12, 11), y(245.0)), Some(Hit::Row(2)));
+        assert_eq!(hit(&v, &g, (12, 12), y(255.0)), Some(Hit::Pane));
+        assert_eq!(hit(&v, &g, (12, 6), y(125.0)), Some(Hit::Pane));
+        assert_eq!(hit(&v, &g, (5, 8), y(165.0)), None);
     }
 
     #[test]
