@@ -31,6 +31,34 @@ pub struct PickerView {
     pub selected: usize,
     /// Whether the items are files (a file picker).
     pub files: bool,
+    /// What the preview pane shows, when there is one.
+    pub preview: Option<PreviewView>,
+}
+
+/// A picker's preview pane. Helix keeps drawing a document's code into the
+/// cells below the title row; the rest is for the host to draw.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PreviewView {
+    /// The pane inside its frame: a title row, then the body.
+    pub inner: Rect,
+    /// The previewed path (relative to the working directory) or buffer name.
+    pub title: String,
+    /// The previewed file, absolute, when there is one.
+    pub path: Option<std::path::PathBuf>,
+    /// The highlighted line range (0-based, inclusive), if any.
+    pub lines: Option<(usize, usize)>,
+    pub body: PreviewBody,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum PreviewBody {
+    /// Code, drawn by Helix in the cells below the title row.
+    #[default]
+    Code,
+    /// A directory's entries: name and whether it is a directory.
+    Directory(Vec<(String, bool)>),
+    /// Nothing to show ("<Binary file>", "<File not found>", …).
+    Message(String),
 }
 
 /// A menu (completion, code actions…) as it last rendered.

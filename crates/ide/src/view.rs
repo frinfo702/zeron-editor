@@ -832,7 +832,8 @@ impl Render for HelixEditor {
                 editor: cx.entity(),
             })
             .children(self.render_docs(&theme, window))
-            .children(self.render_signature(&theme, window));
+            .children(self.render_signature(&theme, window))
+            .children(self.render_preview_image());
         div()
             .id("helix-editor")
             .key_context(KEY_CONTEXT)
@@ -938,6 +939,40 @@ impl HelixEditor {
                     .into_any_element()
             })
             .collect()
+    }
+
+    /// An image file selected in a picker, fitted into the preview body.
+    fn render_preview_image(&self) -> Option<gpui::AnyElement> {
+        let (frame, g) = (self.frame.as_ref()?, self.geometry?);
+        let preview = frame.picker.as_ref()?.preview.as_ref()?;
+        let path = crate::picker::preview_image(preview)?;
+        let a = preview.inner;
+        if a.height < 3 {
+            return None;
+        }
+        // Below the title row, with a little air.
+        let first = g.helix_cell(a.x as usize, (a.y + 1) as usize);
+        let last = g.helix_cell(
+            (a.x + a.width).saturating_sub(1) as usize,
+            (a.y + a.height).saturating_sub(1) as usize,
+        );
+        let origin = first.origin - self.grid_origin;
+        let size = last.origin + point(g.cell_w, g.line_h) - first.origin;
+        Some(
+            div()
+                .absolute()
+                .left(origin.x)
+                .top(origin.y)
+                .w(size.x)
+                .h(size.y)
+                .p(px(12.0))
+                .child(
+                    gpui::img(path.to_path_buf())
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Contain),
+                )
+                .into_any_element(),
+        )
     }
 
     /// LSP signature help as a Zeron card: the signature in the code font,

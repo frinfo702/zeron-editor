@@ -31,7 +31,9 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tui::buffer::Buffer;
 
-pub use helix_term::ui::host_view::{DocView, MenuView, PickerView, PromptView, SignatureView};
+pub use helix_term::ui::host_view::{
+    DocView, MenuView, PickerView, PreviewBody, PreviewView, PromptView, SignatureView,
+};
 pub use helix_view::input::Event;
 
 /// An owned snapshot of one Helix render, safe to hand across threads.

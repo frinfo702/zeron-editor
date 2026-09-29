@@ -578,6 +578,11 @@ pub(crate) fn paint_frame(
     let rows = (buffer.area.height as usize).min(g.rows as usize);
     let cell_at = |col: usize, row: usize| &buffer.content[row * width + col];
     let native_picker = frame.picker.as_ref().map(crate::picker::inner);
+    let native_preview = frame
+        .picker
+        .as_ref()
+        .and_then(|picker| picker.preview.as_ref())
+        .map(crate::picker::preview_native);
     let native_menu = frame.menu.as_ref().map(|menu| menu.area);
     let native_info = frame.info.as_ref().map(|info| info.area);
     let native_prompt = frame.prompt.as_ref().map(|prompt| prompt.area);
@@ -704,6 +709,7 @@ pub(crate) fn paint_frame(
                 let mut paint = resolve_cell(cell_at(col, row), theme);
                 // The picker's list pane is drawn natively (picker.rs).
                 if native_picker.is_some_and(|inner| contains(inner, col, row))
+                    || native_preview.is_some_and(|area| contains(area, col, row))
                     || native_menu.is_some_and(|area| contains(area, col, row))
                     || native_info.is_some_and(|area| contains(area, col, row))
                     || native_prompt.is_some_and(|area| contains(area, col, row))
@@ -967,6 +973,21 @@ pub(crate) fn paint_frame(
             );
             let clip = Bounds::from_corners(first.origin, last.origin + point(g.cell_w, g.line_h));
             cards[card].panes.push((clip, pane));
+        }
+        if let Some(preview) = &view.preview {
+            let inner = preview.inner;
+            if let Some(card) = card_of(inner.x as usize, inner.y as usize) {
+                let mut pane = Layer::default();
+                crate::picker::paint_preview(preview, g, theme, window, &mut pane);
+                let first = g.helix_cell(inner.x as usize, inner.y as usize);
+                let last = g.helix_cell(
+                    (inner.x + inner.width).saturating_sub(1) as usize,
+                    (inner.y + inner.height).saturating_sub(1) as usize,
+                );
+                let clip =
+                    Bounds::from_corners(first.origin, last.origin + point(g.cell_w, g.line_h));
+                cards[card].panes.push((clip, pane));
+            }
         }
     }
 

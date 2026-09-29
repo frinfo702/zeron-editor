@@ -19,7 +19,7 @@ use helix_view::graphics::{Modifier, Rect};
 use zeron_ui::theme::Theme;
 
 use crate::{
-    host::{InfoView, MenuView, PickerView, PromptView},
+    host::{InfoView, MenuView, PickerView, PreviewBody, PreviewView, PromptView},
     paint::{Geometry, Layer},
     theme,
 };
@@ -168,6 +168,138 @@ fn split_path(path: &str) -> (&str, &str) {
     match path.rfind('/') {
         Some(slash) => (&path[..=slash], &path[slash + 1..]),
         None => ("", path),
+    }
+}
+
+/// The cells of a preview pane the grid painter leaves to [`paint_preview`]:
+/// the title row, and the whole body unless it is code.
+pub fn preview_native(view: &PreviewView) -> Rect {
+    let inner = view.inner;
+    match view.body {
+        PreviewBody::Code => Rect::new(inner.x, inner.y, inner.width, inner.height.min(1)),
+        _ => inner,
+    }
+}
+
+/// An image file the preview shows natively (Helix only says "binary").
+pub fn preview_image(view: &PreviewView) -> Option<&std::path::Path> {
+    const IMAGES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico"];
+    let path = view.path.as_deref()?;
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    (matches!(view.body, PreviewBody::Message(_)) && IMAGES.contains(&ext.as_str())).then_some(path)
+}
+
+/// Paint a picker's preview pane chrome into `layer`: a title row with the
+/// file name, its directory muted and the previewed line on the right, a
+/// hairline under it, and a directory listing or message where there is no
+/// code (Helix draws code in the cells below the title).
+pub(crate) fn paint_preview(
+    view: &PreviewView,
+    g: &Geometry,
+    theme: &Theme,
+    window: &Window,
+    layer: &mut Layer,
+) {
+    let inner = view.inner;
+    if inner.width == 0 || inner.height < 2 {
+        return;
+    }
+    let p = Painter {
+        g,
+        theme,
+        window,
+        font: gpui::font(theme.font_sans.clone()),
+    };
+    let left_cell = g.helix_cell(inner.x as usize, inner.y as usize);
+    let right_cell = g.helix_cell((inner.x + inner.width - 1) as usize, inner.y as usize);
+    let (left, right) = (left_cell.origin.x, right_cell.origin.x + g.cell_w);
+
+    // -- Title row.
+    let position = view.lines.map(|(start, end)| {
+        if end > start {
+            format!("L{}–{}", start + 1, end + 1)
+        } else {
+            format!("L{}", start + 1)
+        }
+    });
+    let position = position.map(|text| {
+        let run = p.run(text.len(), theme.text_faint, FontWeight::NORMAL);
+        p.shape(&text, &[run])
+    });
+    let position_w = position
+        .as_ref()
+        .map_or(px(0.0), |line| line.width + px(12.0));
+    let (dir, name) = split_path(&view.title);
+    let name_line = {
+        let run = p.run(name.len(), theme.text, FontWeight::MEDIUM);
+        p.shape(name, &[run])
+    };
+    let dir_line = (!dir.is_empty()).then(|| {
+        let dir = dir.trim_end_matches('/');
+        let run = p.run(dir.len(), theme.text_muted, FontWeight::NORMAL);
+        p.shape(dir, &[run])
+    });
+    let name_w = name_line.width;
+    layer.lines.push((p.row_origin(left, inner.y), name_line));
+    if let Some(dir_line) = dir_line {
+        let x = left + name_w + px(8.0);
+        // Only when it fits beside the position.
+        if x + dir_line.width <= right - position_w {
+            layer.lines.push((p.row_origin(x, inner.y), dir_line));
+        }
+    }
+    if let Some(line) = position {
+        let x = right - line.width;
+        layer.lines.push((p.row_origin(x, inner.y), line));
+    }
+    let rule_y = g.helix_cell(0, (inner.y + 1) as usize).origin.y - px(1.0);
+    layer.rules.push(fill(
+        Bounds::from_corners(point(left, rule_y), point(right, rule_y + px(1.0))),
+        theme.border,
+    ));
+
+    // -- Body, when it is not code.
+    let body_top = inner.y + 1;
+    let body_rows = inner.height - 1;
+    match &view.body {
+        PreviewBody::Code => {}
+        PreviewBody::Directory(entries) => {
+            for (ix, (entry, is_dir)) in entries.iter().take(body_rows as usize).enumerate() {
+                let entry = entry.trim_end_matches('/');
+                let (color, weight) = if *is_dir {
+                    (theme.text, FontWeight::MEDIUM)
+                } else {
+                    (theme.text_muted, FontWeight::NORMAL)
+                };
+                let run = p.run(entry.len(), color, weight);
+                layer.lines.push((
+                    p.row_origin(left, body_top + ix as u16),
+                    p.shape(entry, &[run]),
+                ));
+                if *is_dir {
+                    // A trailing slash, faint, marks folders.
+                    let run = p.run(1, theme.text_faint, FontWeight::NORMAL);
+                    let slash = p.shape("/", &[run]);
+                    let width = {
+                        let run = p.run(entry.len(), color, weight);
+                        p.shape(entry, &[run]).width
+                    };
+                    layer
+                        .lines
+                        .push((p.row_origin(left + width, body_top + ix as u16), slash));
+                }
+            }
+        }
+        PreviewBody::Message(_) if preview_image(view).is_some() => {}
+        PreviewBody::Message(message) => {
+            let message = message.trim_start_matches('<').trim_end_matches('>');
+            let run = p.run(message.len(), theme.text_faint, FontWeight::NORMAL);
+            let line = p.shape(message, &[run]);
+            let x = left + (right - left - line.width).max(px(0.0)) / 2.0;
+            layer
+                .lines
+                .push((p.row_origin(x, body_top + body_rows / 2), line));
+        }
     }
 }
 
@@ -658,6 +790,26 @@ pub(crate) fn paint_info(
 mod tests {
     use super::*;
     use helix_view::graphics::Style;
+
+    #[test]
+    fn preview_leaves_code_to_helix_below_the_title() {
+        let mut preview = PreviewView {
+            inner: Rect::new(40, 2, 30, 20),
+            title: "docs/shot.png".into(),
+            path: Some("/repo/docs/shot.png".into()),
+            ..Default::default()
+        };
+        assert_eq!(preview_native(&preview), Rect::new(40, 2, 30, 1));
+        assert_eq!(preview_image(&preview), None);
+        preview.body = PreviewBody::Message("<Binary file>".into());
+        assert_eq!(preview_native(&preview), preview.inner);
+        assert_eq!(
+            preview_image(&preview),
+            Some(std::path::Path::new("/repo/docs/shot.png"))
+        );
+        preview.path = Some("/repo/a.bin".into());
+        assert_eq!(preview_image(&preview), None);
+    }
 
     fn view(rows: usize, selected: usize) -> PickerView {
         PickerView {

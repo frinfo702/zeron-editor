@@ -57,10 +57,23 @@ that runs on another device shows an explanation instead of an editor.
   layer). They paint as a card of their own: labels in the code font, kind /
   detail muted, a rounded selection and a thin scrollbar. Clicks select and
   accept a row.
-- **Native docs popups.** Hover docs and completion docs report their
-  Markdown and area (`DocView`); the view lays a frosted Zeron card over
-  those cells and renders the Markdown with Zeron's own renderer (single
-  newlines kept as breaks, as Helix shows them).
+- **Native picker previews.** The preview pane reports what it shows
+  (`PreviewView`). Its title row (file name, directory, previewed line) is
+  drawn in the UI font. Directory listings and messages ("Binary file") are
+  drawn natively too, and image files show the image itself. Code stays
+  Helix's own highlighted cells below the title.
+- **Native docs popups.** Hover, completion docs and the command line's
+  help report their Markdown and area (`DocView`); the view lays a frosted
+  Zeron card over those cells and renders the Markdown with Zeron's own
+  renderer (single newlines kept as breaks, as Helix shows them; code
+  blocks highlighted by `zeron-syntax`, without a language header).
+- **Native signature help.** `SignatureView` carries the signature, the
+  active parameter's range and its docs: the signature in the code font,
+  syntax-highlighted with the active parameter washed in the accent, then
+  the docs as Markdown.
+- **Native command line completions.** The `:` prompt's completion grid
+  (`PromptView`) is drawn as measured columns with a rounded selection;
+  clicks pick an item.
 - **Native info box.** The pending-keys box ("which key") is read from
   `editor.autoinfo` and laid out where Helix puts it: its title, then each
   key as a small key cap beside its description. The message line's echo of
@@ -146,11 +159,8 @@ borrows compiled grammars from an existing Helix install.
 
 ## Not done yet
 
-- **Signature help and the command line's completions are restyled, not
-  rebuilt.** They render as Zeron cards with Helix's cell layout inside; the
-  same `host_views` hook in `helix-term` is how they would follow. The
-  picker preview pane is still Helix's grid, and code blocks in Markdown
-  docs are not syntax-highlighted yet.
+- **Code in picker previews is Helix's cell rendering** (highlighted, in the
+  code font, with Zeron's colors), not a Zeron code view.
 - **Off macOS, most Ctrl chords go to the editor** while it has focus, so
   Zeron's other `Mod` shortcuts (Ctrl there) are shadowed. The Agent/IDE
   switch and the sidebar, terminal, files and changes toggles always pass

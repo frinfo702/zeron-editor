@@ -58,3 +58,6 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
 - `Prompt` records a `PromptView` (its completion grid) and reports its help
   text as a doc; `SignatureHelp` reports a `SignatureView` (signatures,
   active parameter range, docs); `Hover` reports the active hover as a doc.
+- `Picker` records a `PreviewView` (title, path, line range, and whether the
+  body is code, a directory listing or a message). The preview gains a
+  title row: the previewed path, above the code.
