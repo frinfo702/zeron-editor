@@ -1,0 +1,54 @@
+[package]
+name = "zeron-ide"
+version.workspace = true
+edition.workspace = true
+# Links MPL-2.0 Helix crates from vendor/helix; this crate's own sources are MIT.
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Review fixture with offscreen capture (render_to_image).
+fixture = ["dep:gpui_platform", "gpui_platform/test-support", "gpui/test-support"]
+
+[[example]]
+name = "ide-fixture"
+required-features = ["fixture"]
+
+[[example]]
+name = "ide-shell-fixture"
+required-features = ["fixture"]
+
+[dependencies]
+gpui_platform = { workspace = true, optional = true }
+helix-core = { path = "../../vendor/helix/helix-core" }
+helix-view = { path = "../../vendor/helix/helix-view" }
+helix-term = { path = "../../vendor/helix/helix-term", default-features = false, features = ["git", "headless"] }
+helix-loader = { path = "../../vendor/helix/helix-loader" }
+helix-lsp = { path = "../../vendor/helix/helix-lsp" }
+helix-event = { path = "../../vendor/helix/helix-event" }
+helix-stdx = { path = "../../vendor/helix/helix-stdx" }
+tui = { path = "../../vendor/helix/helix-tui", package = "helix-tui", default-features = false }
+anyhow.workspace = true
+gpui.workspace = true
+zeron-ui.workspace = true
+zeron-markdown.workspace = true
+zeron-syntax.workspace = true
+toml = "0.8"
+serde.workspace = true
+tokio.workspace = true
+futures.workspace = true
+tokio-stream = "0.1"
+tracing.workspace = true
+# Provides the tree-sitter C runtime for Helix (see .cargo/config.toml).
+# Pinned to zeron-syntax's version so the whole app links one runtime.
+tree-sitter = "=0.26.11"
+
+[dev-dependencies]
+gpui-base.workspace = true
+zeron-proto.workspace = true
+serde_json.workspace = true
+gpui_tokio.workspace = true
+zeron-theme.workspace = true
+tracing-subscriber.workspace = true
+tempfile.workspace = true
+zeron-syntax.workspace = true

@@ -65,6 +65,7 @@ mod chat_dropzone_tests;
 mod command_palette;
 mod files_panel;
 mod harness_updates;
+mod ide_mode;
 mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
@@ -100,6 +101,7 @@ actions!(
         ToggleSidebar,
         ToggleChanges,
         ToggleFiles,
+        ToggleIde,
         AddSpacePalette,
         ToggleCommandPalette,
         OpenModelPicker,
@@ -453,6 +455,11 @@ pub fn apply_keymap(
             None,
         ),
         KeyBinding::new(
+            &valid_or_default(&keymap.toggle_ide, "mod-shift-i"),
+            ToggleIde,
+            None,
+        ),
+        KeyBinding::new(
             &valid_or_default(&keymap.new_session, "mod-n"),
             NewSession,
             None,
@@ -521,6 +528,8 @@ pub enum SettingsSection {
     Agents,
     Appearance,
     Files,
+    /// IDE mode's editor: keymap, gutter, Helix config files, grammars.
+    Editor,
     Notifications,
     Shortcuts,
     /// Composer and conversation behavior plus thread naming.
@@ -532,11 +541,12 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 9] = [
+    pub const ALL: [SettingsSection; 10] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Shortcuts,
+        SettingsSection::Editor,
         SettingsSection::Harnesses,
         SettingsSection::Devices,
         SettingsSection::Files,
@@ -578,6 +588,7 @@ impl SettingsSection {
             SettingsSection::Agents => "agents",
             SettingsSection::Appearance => "appearance",
             SettingsSection::Files => "files",
+            SettingsSection::Editor => "editor",
             SettingsSection::Notifications => "notifications",
             SettingsSection::Shortcuts => "shortcuts",
             SettingsSection::General => "general",
@@ -594,6 +605,7 @@ impl SettingsSection {
             "agents" => SettingsSection::Agents,
             "appearance" => SettingsSection::Appearance,
             "files" => SettingsSection::Files,
+            "editor" | "ide" => SettingsSection::Editor,
             "notifications" => SettingsSection::Notifications,
             "shortcuts" => SettingsSection::Shortcuts,
             "general" | "conversations" => SettingsSection::General,
@@ -618,6 +630,7 @@ impl SettingsSection {
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
+            SettingsSection::Editor => "Editor",
             SettingsSection::Notifications => "Notifications",
             SettingsSection::Shortcuts => "Shortcuts",
             SettingsSection::General => "General",
@@ -1798,6 +1811,10 @@ pub struct Shell {
     /// One independent editor per opened workspace file. IDs are global
     /// while the lookup key keeps a file tab scoped to its chat panel.
     file_surfaces: std::collections::HashMap<u64, Entity<FilesSurface>>,
+    /// The IDE mode editor and the folder it currently shows (see `ide_mode`).
+    ide_editor: Option<(PathBuf, std::rc::Rc<dyn crate::ide::IdeEditor>)>,
+    /// Folder IDE mode shows instead of the session's (Helix config files).
+    ide_workspace_override: Option<PathBuf>,
     file_surface_paths: std::collections::HashMap<u64, String>,
     /// Open editors by (pane, owning chat, path): a side chat's file links
     /// open editors bound to the side chat, beside the main chat's own.
@@ -1843,6 +1860,8 @@ pub struct Shell {
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
+    editor_settings_page: Option<Entity<crate::settings::editor::EditorSettingsPage>>,
+    editor_settings_sub: Option<Subscription>,
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
@@ -2253,6 +2272,8 @@ impl Shell {
             files: std::collections::HashMap::new(),
             files_subs: std::collections::HashMap::new(),
             file_surfaces: std::collections::HashMap::new(),
+            ide_editor: None,
+            ide_workspace_override: None,
             file_surface_paths: std::collections::HashMap::new(),
             file_surface_keys: std::collections::HashMap::new(),
             file_surface_subs: std::collections::HashMap::new(),
@@ -2289,6 +2310,8 @@ impl Shell {
             archived_page: None,
             appearance_page: None,
             files_settings_page: None,
+            editor_settings_page: None,
+            editor_settings_sub: None,
             notifications_page: None,
             shortcuts_page: None,
             accounts_page: None,
@@ -4716,6 +4739,37 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
+            SettingsSection::Editor => {
+                use crate::settings::editor::{EditorSettingsEvent, EditorSettingsPage};
+                if self.editor_settings_page.is_none() {
+                    let page = cx.new(EditorSettingsPage::new);
+                    self.editor_settings_sub = Some(cx.subscribe_in(
+                        &page,
+                        window,
+                        |this: &mut Shell, _, event: &EditorSettingsEvent, window, cx| match event
+                        {
+                            EditorSettingsEvent::OpenConfigFile { file, folder } => {
+                                // Leave Settings without `close_settings`: its
+                                // focus restore would pull focus back to the
+                                // composer, away from the editor.
+                                this.settings_focus_pending = false;
+                                this.route = Route::Chat;
+                                this.ide_open_in_folder(folder.clone(), file.clone(), window, cx);
+                            }
+                            EditorSettingsEvent::ReloadConfig => {
+                                if let Some((_, editor)) = &this.ide_editor {
+                                    editor.reload_config(cx);
+                                }
+                            }
+                        },
+                    ));
+                    self.editor_settings_page = Some(page);
+                }
+                match &self.editor_settings_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
             SettingsSection::Files => {
                 if self.files_settings_page.is_none() {
                     let page = cx.new(|cx| {
@@ -6758,6 +6812,7 @@ impl Shell {
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
             SettingsSection::Files => icons::FOLDER,
+            SettingsSection::Editor => icons::PEN,
             SettingsSection::Notifications => icons::BELL,
             SettingsSection::Shortcuts => icons::KEYBOARD,
             SettingsSection::General => icons::SETTINGS,
@@ -12098,6 +12153,7 @@ impl Render for Shell {
         self.settings.accent = crate::appearance::accent(cx);
         self.settings.surface = crate::appearance::surface(cx);
         self.sync_independent_settings(cx);
+        self.sync_ide_settings(cx);
         let theme = Theme::of(cx);
         // The shell frost sits over native desktop blur on macOS and Windows.
         // Content surfaces add their own backgrounds over this shared tint.
@@ -12358,6 +12414,11 @@ impl Render for Shell {
                     this.toggle_files_panel(window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &ToggleIde, window, cx| {
+                if matches!(this.route, Route::Chat) {
+                    this.toggle_workspace_mode(window, cx);
+                }
+            }))
             // Chat-scoped like the panel toggles: Settings has no current
             // session to archive. Quiet under an open popover, like the other
             // session-nav shortcuts.
@@ -12544,7 +12605,11 @@ impl Render for Shell {
                     },
                     cx,
                 );
-                let main = self.render_main(window, main_content_width, transcript_width, cx);
+                let main = if self.ide_mode_active(cx) {
+                    self.render_ide(window, cx)
+                } else {
+                    self.render_main(window, main_content_width, transcript_width, cx)
+                };
                 // The Changes pane is chat-scoped chrome: the Settings route
                 // never renders it (zeron __root.tsx `!isSettings && activeChat`
                 // around the diff column) — the per-session open flags stay

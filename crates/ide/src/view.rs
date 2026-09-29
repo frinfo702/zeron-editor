@@ -1,0 +1,1617 @@
+//! The editor surface: a gpui view over one [`HelixHost`].
+//!
+//! Helix renders into a cell grid; this view paints that grid with Zeron's
+//! code font and theme tokens (see [`crate::theme`]), measures how many cells
+//! fit and reports that back as a resize, and forwards keys, mouse and focus.
+//!
+//! Keys are taken in a keystroke **interceptor**, ahead of gpui's action
+//! bindings: Zeron binds app-wide shortcuts (⌘S, ⌘B, …) that would otherwise
+//! fire before a focused element's `on_key_down`. While the editor has focus
+//! it takes every key except the ⌘ chords it does not claim
+//! ([`keymap::claims_platform_key`]), which keep their Zeron meaning.
+
+use std::{path::PathBuf, rc::Rc, sync::Arc};
+
+use futures::{StreamExt as _, channel::mpsc};
+use gpui::{
+    App, Bounds, Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
+    EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId, IntoElement,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
+    ScrollDelta, ScrollWheelEvent, SharedString, Style, Subscription, Task, UTF16Selection, Window,
+    div, point, prelude::*, px, relative,
+};
+use helix_view::{
+    document::Mode,
+    input::{Event, MouseButton as HelixButton, MouseEvent, MouseEventKind},
+    keyboard::KeyModifiers,
+};
+use zeron_ui::{ide::IdeSettings, theme::Theme};
+
+use crate::{
+    dirs::IdeDirs,
+    host::{Frame, HelixHost, HostOptions},
+    keymap, keys,
+    paint::{self, Geometry, GridPaint},
+    standard, theme,
+};
+
+/// Key context set on the editor; the interceptor only acts inside it.
+pub const KEY_CONTEXT: &str = "HelixEditor";
+
+/// Line height as a multiple of the code font size.
+const LINE_HEIGHT: f32 = 1.5;
+/// How often open files are checked for changes made on disk.
+const DISK_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Inset between the view edge and the first cell.
+const PADDING: f32 = 4.0;
+
+pub struct EditorOptions {
+    pub dirs: IdeDirs,
+    pub workspace: PathBuf,
+    pub files: Vec<PathBuf>,
+    pub settings: IdeSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorStatus {
+    Running,
+    /// Helix quit (`:q`) or failed; `Some` carries the failure.
+    Exited(Option<SharedString>),
+}
+
+pub enum EditorEvent {
+    Exited,
+}
+
+impl EventEmitter<EditorEvent> for HelixEditor {}
+
+enum Wake {
+    Frame,
+    Exit(Option<String>),
+}
+
+pub struct HelixEditor {
+    host: Option<HelixHost>,
+    dirs: IdeDirs,
+    /// The folder Helix works in; the config loader reads its
+    /// `.helix/config.toml` on reload.
+    workspace_dir: Arc<std::sync::Mutex<PathBuf>>,
+    settings: IdeSettings,
+    /// The settings the Helix-side config loader reads on reload.
+    shared_settings: Arc<std::sync::Mutex<IdeSettings>>,
+    frame: Option<Arc<Frame>>,
+    focus: FocusHandle,
+    status: EditorStatus,
+    /// Config problems (bad `config.toml`) shown over a running editor.
+    config_error: Option<SharedString>,
+    geometry: Option<Geometry>,
+    /// Window position of the grid element, for overlays placed over cells.
+    grid_origin: Point<Pixels>,
+    /// Parsed and highlighted docs popups, by Markdown source.
+    doc_cache: std::cell::RefCell<std::collections::HashMap<String, Rc<ParsedDoc>>>,
+    /// Grid size last sent to Helix.
+    sent_grid: Option<(u16, u16)>,
+    drag_button: Option<HelixButton>,
+    /// Sub-line scroll remainder, in lines.
+    scroll_carry: f32,
+    /// IME composition in progress. It is drawn at the cursor but not sent
+    /// to Helix until the IME commits it.
+    marked: Option<String>,
+    _wake: Task<()>,
+    _disk_sync: Task<()>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl HelixEditor {
+    pub fn new(options: EditorOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let EditorOptions {
+            dirs,
+            workspace,
+            files,
+            settings,
+        } = options;
+        crate::fonts::ensure(cx);
+        let workspace_dir = Arc::new(std::sync::Mutex::new(workspace.clone()));
+        let (config, config_error) = load_config(&dirs, &workspace, &settings);
+        let shared_settings = Arc::new(std::sync::Mutex::new(settings.clone()));
+        // `:config-reload` (and the settings page) rebuild through the same
+        // layering as startup, not from config.toml alone.
+        let (load_dirs, load_workspace, load_settings) =
+            (dirs.clone(), workspace_dir.clone(), shared_settings.clone());
+        let host_config = helix_term::application::headless::HostConfig {
+            load: Box::new(move || {
+                let settings = load_settings.lock().unwrap().clone();
+                let workspace = load_workspace.lock().unwrap().clone();
+                let (global, local) = read_config_files(&load_dirs, &workspace);
+                keymap::build_config(&settings, global.as_deref(), local.as_deref())
+            }),
+            default_theme: Box::new(theme::helix_theme),
+        };
+
+        let (wake_tx, mut wake_rx) = mpsc::unbounded();
+        let exit_tx = wake_tx.clone();
+        let spawned = HelixHost::spawn(HostOptions {
+            workspace,
+            files,
+            config,
+            host_config: Some(host_config),
+            on_frame: Box::new(move || {
+                let _ = wake_tx.unbounded_send(Wake::Frame);
+            }),
+            on_exit: Box::new(move |err| {
+                let _ = exit_tx.unbounded_send(Wake::Exit(err.map(|err| format!("{err:#}"))));
+            }),
+        });
+        let (host, status) = match spawned {
+            Ok(host) => {
+                if keymap::is_modeless(settings.keymap) {
+                    host.call(|app| app.editor.mode = Mode::Insert);
+                }
+                (Some(host), EditorStatus::Running)
+            }
+            Err(err) => (None, EditorStatus::Exited(Some(format!("{err:#}").into()))),
+        };
+
+        let wake = cx.spawn(async move |this, cx| {
+            while let Some(wake) = wake_rx.next().await {
+                let alive = this.update(cx, |this, cx| match wake {
+                    Wake::Frame => {
+                        if let Some(frame) = this.host.as_ref().and_then(HelixHost::take_frame) {
+                            this.frame = Some(Arc::new(frame));
+                            cx.notify();
+                        }
+                    }
+                    Wake::Exit(err) => {
+                        this.host = None;
+                        this.status = EditorStatus::Exited(err.map(Into::into));
+                        cx.emit(EditorEvent::Exited);
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        });
+
+        // Pick up files an agent (or anything else) changed on disk.
+        let disk_sync = cx.spawn(async move |this, cx| {
+            let state = Arc::new(std::sync::Mutex::new(crate::disk::DiskSync::default()));
+            loop {
+                cx.background_executor().timer(DISK_SYNC_INTERVAL).await;
+                let alive = this.update(cx, |this, _| {
+                    if let Some(host) = &this.host {
+                        let state = state.clone();
+                        host.poll(move |app| {
+                            let report = crate::disk::sync(app, &mut state.lock().unwrap());
+                            !report.reloaded.is_empty() || !report.conflicted.is_empty()
+                        });
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let focus = cx.focus_handle();
+        let weak = cx.entity().downgrade();
+        let intercept = cx.intercept_keystrokes(move |event, window, cx| {
+            let Some(this) = weak.upgrade() else { return };
+            // Pane toggles and the Agent/IDE switch stay Zeron's.
+            if zeron_ui::ide::is_passthrough(&event.keystroke, cx) {
+                return;
+            }
+            let handled = this.update(cx, |this, cx| {
+                this.focus.contains_focused(window, cx) && this.handle_keystroke(&event.keystroke)
+            });
+            if handled {
+                cx.stop_propagation();
+            }
+        });
+        let focus_in = cx.on_focus_in(&focus, window, |this, _, _| {
+            this.send(Event::FocusGained);
+        });
+        let focus_out = cx.on_focus_out(&focus, window, |this, _, _, _| {
+            this.send(Event::FocusLost);
+        });
+
+        Self {
+            host,
+            dirs,
+            workspace_dir,
+            settings,
+            shared_settings,
+            frame: None,
+            focus,
+            status,
+            config_error,
+            geometry: None,
+            grid_origin: Point::default(),
+            doc_cache: Default::default(),
+            sent_grid: None,
+            drag_button: None,
+            scroll_carry: 0.0,
+            marked: None,
+            _wake: wake,
+            _disk_sync: disk_sync,
+            _subscriptions: vec![intercept, focus_in, focus_out],
+        }
+    }
+
+    /// Rebuild the Helix config from `settings` and the files on disk
+    /// (`config.toml`, `languages.toml`) and apply it live: keymap mode,
+    /// gutter, wrapping, language servers.
+    pub fn apply_settings(&mut self, settings: IdeSettings, cx: &mut Context<Self>) {
+        let workspace = self.workspace_dir.lock().unwrap().clone();
+        let (_, config_error) = load_config(&self.dirs, &workspace, &settings);
+        let was_modeless = keymap::is_modeless(self.settings.keymap);
+        let modeless = keymap::is_modeless(settings.keymap);
+        *self.shared_settings.lock().unwrap() = settings.clone();
+        self.settings = settings;
+        self.config_error = config_error;
+        if let Some(host) = &self.host {
+            host.call(move |app| {
+                app.reload_config();
+                if modeless {
+                    app.editor.mode = Mode::Insert;
+                } else if was_modeless {
+                    app.editor.enter_normal_mode();
+                }
+            });
+        }
+        cx.notify();
+    }
+
+    /// Point Helix at another folder: file pickers, global search and new
+    /// language servers root there. Open buffers from other folders stay.
+    pub fn set_workspace(&mut self, workspace: PathBuf, cx: &mut Context<Self>) {
+        {
+            let mut current = self.workspace_dir.lock().unwrap();
+            if *current == workspace {
+                return;
+            }
+            *current = workspace.clone();
+        }
+        let workspace_now = workspace.clone();
+        self.config_error = load_config(&self.dirs, &workspace_now, &self.settings).1;
+        if let Some(host) = &self.host {
+            host.call(move |app| {
+                match helix_stdx::env::set_current_working_dir(&workspace) {
+                    Ok(_) => {
+                        // A workspace may carry its own .helix/config.toml.
+                        app.reload_config();
+                        app.editor
+                            .set_status(format!("Workspace: {}", workspace.display()));
+                    }
+                    Err(err) => app
+                        .editor
+                        .set_error(format!("{}: {err}", workspace.display())),
+                }
+            });
+        }
+        cx.notify();
+    }
+
+    pub fn settings(&self) -> &IdeSettings {
+        &self.settings
+    }
+
+    pub fn status(&self) -> &EditorStatus {
+        &self.status
+    }
+
+    /// The running Helix instance, for callers that drive it directly
+    /// (open a file from the tree, run a command).
+    pub fn host(&self) -> Option<&HelixHost> {
+        self.host.as_ref()
+    }
+
+    /// Open `path` in Helix (replacing the current view's document, like
+    /// `:open`), focusing an existing buffer if the file is already open.
+    pub fn open(&self, path: PathBuf) {
+        if let Some(host) = &self.host {
+            host.call(move |app| {
+                if let Err(err) = app.editor.open(&path, helix_view::editor::Action::Replace) {
+                    app.editor.set_error(format!("{}: {err}", path.display()));
+                }
+            });
+        }
+    }
+
+    fn send(&self, event: Event) {
+        if let Some(host) = &self.host {
+            host.send(event);
+        }
+    }
+
+    fn handle_keystroke(&mut self, keystroke: &gpui::Keystroke) -> bool {
+        if self.host.is_none() {
+            return false;
+        }
+        if keystroke.modifiers.platform && !keymap::claims_platform_key(keystroke) {
+            return false;
+        }
+        let Some(key) = keys::to_helix(keystroke) else {
+            return false;
+        };
+        self.send_key(key);
+        true
+    }
+
+    /// Send a key, with standard mode's replace-the-selection rules.
+    fn send_key(&self, key: helix_view::input::KeyEvent) {
+        match &self.host {
+            Some(host)
+                if keymap::is_modeless(self.settings.keymap)
+                    && standard::classify(&key) != standard::Edit::Other =>
+            {
+                host.call(move |app| standard::apply_key(app, key));
+            }
+            _ => self.send(Event::Key(key)),
+        }
+    }
+
+    fn on_geometry(&mut self, geometry: Geometry, grid_origin: Point<Pixels>) {
+        self.geometry = Some(geometry);
+        self.grid_origin = grid_origin;
+        // One row more than fits: Helix's message line, drawn only on demand.
+        let grid = (geometry.cols, geometry.rows + 1);
+        if self.sent_grid != Some(grid) {
+            self.sent_grid = Some(grid);
+            self.send(Event::Resize(grid.0, grid.1));
+        }
+    }
+
+    fn cell_at(&self, position: Point<Pixels>) -> Option<(u16, u16)> {
+        let g = self.geometry?;
+        let col = ((position.x - g.origin.x) / g.cell_w).floor().max(0.0) as u16;
+        let row = g.row_at(position.y - g.origin.y) as u16;
+        Some((
+            col.min(g.cols.saturating_sub(1)),
+            row.min(g.rows.saturating_sub(1)),
+        ))
+    }
+
+    fn send_mouse(&self, kind: MouseEventKind, position: Point<Pixels>, mods: &gpui::Modifiers) {
+        let Some((column, row)) = self.cell_at(position) else {
+            return;
+        };
+        let mut modifiers = KeyModifiers::empty();
+        if mods.shift {
+            modifiers.insert(KeyModifiers::SHIFT);
+        }
+        if mods.alt {
+            modifiers.insert(KeyModifiers::ALT);
+        }
+        if mods.control {
+            modifiers.insert(KeyModifiers::CONTROL);
+        }
+        self.send(Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers,
+        }));
+    }
+
+    /// The native picker under `position`, if any.
+    fn picker_hit(
+        &self,
+        position: Point<Pixels>,
+    ) -> Option<(crate::host::PickerView, crate::picker::Hit)> {
+        let view = self.frame.as_ref()?.picker.clone()?;
+        let cell = self.cell_at(position)?;
+        crate::picker::hit(&view, &self.geometry?, cell, position.y).map(|hit| (view, hit))
+    }
+
+    fn menu_hit(&self, position: Point<Pixels>) -> Option<(crate::host::MenuView, Option<usize>)> {
+        let menu = self.frame.as_ref()?.menu.clone()?;
+        let cell = self.cell_at(position)?;
+        crate::picker::menu_hit(&menu, cell).map(|row| (menu, row))
+    }
+
+    fn send_keys<'a>(&self, keys: impl IntoIterator<Item = &'a str>) {
+        for key in keys {
+            if let Ok(key) = key.parse() {
+                self.send(Event::Key(key));
+            }
+        }
+    }
+
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus, cx);
+        // A click on a native picker row picks it; elsewhere in the list pane
+        // it does nothing (Helix would read it as a click on its cells).
+        if let Some((view, hit)) = self.picker_hit(event.position) {
+            if let (crate::picker::Hit::Row(index), MouseButton::Left) = (hit, event.button) {
+                self.send_keys(crate::picker::keys_to_select(&view, index));
+                self.send_keys(["ret"]);
+            }
+            return;
+        }
+        // A command line completion: select it (Enter still runs).
+        if let Some(view) = self.frame.as_ref().and_then(|frame| frame.prompt.clone())
+            && let Some((col, row)) = self.cell_at(event.position)
+            // The grid is drawn one row up while the prompt is open.
+            && let Some(hit) = crate::picker::prompt_hit(&view, (col, row + 1))
+        {
+            if let (Some(index), MouseButton::Left) = (hit, event.button) {
+                self.send_keys(crate::picker::prompt_keys_to_select(&view, index));
+            }
+            return;
+        }
+        // Likewise a completion (or other) menu row.
+        if let Some((menu, row)) = self.menu_hit(event.position) {
+            if let (Some(index), MouseButton::Left) = (row, event.button) {
+                self.send_keys(crate::picker::menu_keys_to_select(&menu, index));
+                self.send_keys(["ret"]);
+            }
+            return;
+        }
+        let Some(button) = helix_button(event.button) else {
+            return;
+        };
+        self.drag_button = Some(button);
+        self.send_mouse(
+            MouseEventKind::Down(button),
+            event.position,
+            &event.modifiers,
+        );
+    }
+
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        let Some(button) = helix_button(event.button) else {
+            return;
+        };
+        self.drag_button = None;
+        self.send_mouse(MouseEventKind::Up(button), event.position, &event.modifiers);
+    }
+
+    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, _: &mut Context<Self>) {
+        if let Some(button) = self.drag_button.filter(|_| event.dragging()) {
+            self.send_mouse(
+                MouseEventKind::Drag(button),
+                event.position,
+                &event.modifiers,
+            );
+        }
+    }
+
+    fn on_scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, _: &mut Context<Self>) {
+        let Some(g) = self.geometry else { return };
+        let lines = match event.delta {
+            ScrollDelta::Lines(delta) => delta.y,
+            ScrollDelta::Pixels(delta) => delta.y / g.line_h,
+        };
+        // Over a native picker the wheel moves its selection.
+        if self.picker_hit(event.position).is_some() {
+            self.scroll_carry += lines;
+            while self.scroll_carry.abs() >= 1.0 {
+                let key = if self.scroll_carry > 0.0 {
+                    self.scroll_carry -= 1.0;
+                    "up"
+                } else {
+                    self.scroll_carry += 1.0;
+                    "down"
+                };
+                self.send_keys([key]);
+            }
+            return;
+        }
+        // Helix scrolls `scroll-lines` (1 under Zeron's defaults) per event.
+        self.scroll_carry += lines;
+        while self.scroll_carry.abs() >= 1.0 {
+            let kind = if self.scroll_carry > 0.0 {
+                self.scroll_carry -= 1.0;
+                MouseEventKind::ScrollUp
+            } else {
+                self.scroll_carry += 1.0;
+                MouseEventKind::ScrollDown
+            };
+            self.send_mouse(kind, event.position, &event.modifiers);
+        }
+    }
+}
+
+/// Styles for a signature: syntax colors from zeron-syntax, and the active
+/// parameter washed in the accent (and semibold). Byte ranges, sorted and
+/// non-overlapping as `StyledText` requires.
+fn signature_highlights(
+    view: &crate::host::SignatureView,
+    theme: &Theme,
+) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+    let text = view.signature.as_str();
+    let mut colors: Vec<Option<gpui::Hsla>> = vec![None; text.len()];
+    let highlighted = zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+        source: text,
+        path: None,
+        fence_tag: Some(view.language.as_str()),
+    });
+    if let Ok(document) = highlighted {
+        let mut line_start = 0;
+        for (line, spans) in text.split_inclusive('\n').zip(&document.lines) {
+            for span in spans {
+                let range = (line_start + span.range.start).min(text.len())
+                    ..(line_start + span.range.end).min(text.len());
+                for byte in range {
+                    colors[byte] = Some(theme.syntax.color(span.kind));
+                }
+            }
+            line_start += line.len();
+        }
+    }
+    let active = view
+        .active_param
+        .map(|(start, end)| start.min(text.len())..end.min(text.len()));
+    let style_at = |byte: usize| {
+        let is_active = active.as_ref().is_some_and(|range| range.contains(&byte));
+        gpui::HighlightStyle {
+            color: colors[byte],
+            background_color: is_active.then_some(theme.accent_wash),
+            font_weight: is_active.then_some(gpui::FontWeight::SEMIBOLD),
+            ..Default::default()
+        }
+    };
+    let mut runs: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = Vec::new();
+    for (byte, _) in text.char_indices() {
+        let style = style_at(byte);
+        let len = text[byte..].chars().next().map_or(1, char::len_utf8);
+        match runs.last_mut() {
+            Some((range, last)) if *last == style && range.end == byte => range.end = byte + len,
+            _ => runs.push((byte..byte + len, style)),
+        }
+    }
+    runs.retain(|(_, style)| *style != gpui::HighlightStyle::default());
+    runs
+}
+
+/// Corner radius of a docs / signature popup (Zed's hover card).
+const POPUP_RADIUS: f32 = 8.0;
+/// Horizontal padding inside a docs / signature popup.
+const POPUP_PAD_X: f32 = 10.0;
+/// A cursor popup opens above the cursor instead when fewer rows than this
+/// fit below it and there is more room above.
+const POPUP_MIN_ROWS: f32 = 12.0;
+
+/// A hairline across the whole popup, between a signature and its docs.
+fn popup_rule(theme: &Theme) -> gpui::AnyElement {
+    div()
+        .my(px(2.0))
+        .h(px(1.0))
+        .w_full()
+        .bg(theme.border)
+        .into_any_element()
+}
+
+/// A docs popup's blocks, the way Zed lays out hover docs: code blocks as
+/// plain highlighted code in the code font (no box, no language label),
+/// wrapping; thematic breaks as full-width hairlines; everything else in
+/// Zeron's Markdown renderer.
+fn doc_blocks(
+    parsed: &ParsedDoc,
+    key: &str,
+    theme: &Theme,
+    window: &Window,
+) -> Vec<gpui::AnyElement> {
+    parsed
+        .tree
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(ix, top)| match &top.block {
+            zeron_markdown::Block::CodeBlock { code, .. } => {
+                let code = code.trim_end_matches('\n').to_string();
+                let runs = parsed
+                    .highlights
+                    .get(ix)
+                    .cloned()
+                    .flatten()
+                    .map(|document| syntax_runs(&code, &document, theme))
+                    .unwrap_or_default();
+                div()
+                    .px(px(POPUP_PAD_X))
+                    .font_family(theme.font_mono.clone())
+                    .text_color(theme.code_text)
+                    .child(gpui::StyledText::new(code).with_highlights(runs))
+                    .into_any_element()
+            }
+            zeron_markdown::Block::Rule => popup_rule(theme),
+            _ => {
+                let tree = zeron_markdown::BlockTree {
+                    blocks: vec![top.clone()],
+                };
+                let opts = zeron_ui::markdown::render::RenderOptions::settled(
+                    format!("{key}-{ix}").into(),
+                );
+                div()
+                    .px(px(POPUP_PAD_X))
+                    .child(zeron_ui::markdown::render::render_tree(
+                        &tree,
+                        &opts,
+                        theme,
+                        window,
+                        &|_| None,
+                    ))
+                    .into_any_element()
+            }
+        })
+        .collect()
+}
+
+/// Syntax colors for `text` from its highlighted lines, as text runs.
+fn syntax_runs(
+    text: &str,
+    document: &zeron_syntax::HighlightedDocument,
+    theme: &Theme,
+) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+    let mut runs = Vec::new();
+    let mut line_start = 0;
+    for (line, spans) in text.split_inclusive('\n').zip(&document.lines) {
+        for span in spans {
+            let start = (line_start + span.range.start).min(text.len());
+            let end = (line_start + span.range.end).min(text.len());
+            if start < end && text.is_char_boundary(start) && text.is_char_boundary(end) {
+                runs.push((
+                    start..end,
+                    gpui::HighlightStyle {
+                        color: Some(theme.syntax.color(span.kind)),
+                        ..Default::default()
+                    },
+                ));
+            }
+        }
+        line_start += line.len();
+    }
+    runs
+}
+
+/// A docs popup's Markdown, parsed, with its code blocks highlighted.
+struct ParsedDoc {
+    tree: zeron_markdown::BlockTree,
+    /// Per top-level block: the highlight of a code block.
+    highlights: Vec<Option<Arc<zeron_syntax::HighlightedDocument>>>,
+}
+
+fn parsed_doc(
+    cache: &std::cell::RefCell<std::collections::HashMap<String, Rc<ParsedDoc>>>,
+    markdown: &str,
+) -> Rc<ParsedDoc> {
+    if let Some(parsed) = cache.borrow().get(markdown) {
+        return parsed.clone();
+    }
+    let mut tree = zeron_markdown::parse_full(&hard_breaks(markdown));
+    let highlights = tree
+        .blocks
+        .iter()
+        .map(|top| match &top.block {
+            zeron_markdown::Block::CodeBlock { language, code } => {
+                zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+                    source: code,
+                    path: None,
+                    fence_tag: language.as_deref(),
+                })
+                .ok()
+                .map(Arc::new)
+            }
+            _ => None,
+        })
+        .collect();
+    // A popup has no room for a fence's language header; the highlight
+    // already carries the language.
+    for top in &mut tree.blocks {
+        if let zeron_markdown::Block::CodeBlock { language, .. } = &mut Arc::make_mut(top).block {
+            *language = None;
+        }
+    }
+    let parsed = Rc::new(ParsedDoc { tree, highlights });
+    cache
+        .borrow_mut()
+        .insert(markdown.to_string(), parsed.clone());
+    parsed
+}
+
+/// Helix shows every newline in its docs popups as a line break (paths,
+/// `type:` / `permissions:` rows, manually wrapped doc comments); CommonMark
+/// joins single newlines into one paragraph. Make them hard breaks outside
+/// code fences so the Markdown card reads like Helix's.
+fn hard_breaks(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len() + 16);
+    let mut in_fence = false;
+    let lines: Vec<&str> = markdown.lines().collect();
+    for (ix, line) in lines.iter().enumerate() {
+        let fence = line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~");
+        if fence {
+            in_fence = !in_fence;
+        }
+        out.push_str(line);
+        let next_blank = lines.get(ix + 1).is_none_or(|next| next.trim().is_empty());
+        if !in_fence && !fence && !line.trim().is_empty() && !next_blank {
+            out.push('\\');
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// The layered config for `settings`; a bad `config.toml` falls back to the
+/// built-in layers and reports the problem.
+fn load_config(
+    dirs: &IdeDirs,
+    workspace: &std::path::Path,
+    settings: &IdeSettings,
+) -> (helix_term::config::Config, Option<SharedString>) {
+    let (global, local) = read_config_files(dirs, workspace);
+    match keymap::build_config(settings, global.as_deref(), local.as_deref()) {
+        Ok(config) => (config, None),
+        Err(err) => (
+            keymap::build_config(settings, None, None).expect("built-in layers load"),
+            Some(SharedString::from(format!("config.toml: {err}"))),
+        ),
+    }
+}
+
+/// The user's `config.toml` and the workspace's `.helix/config.toml`.
+fn read_config_files(
+    dirs: &IdeDirs,
+    workspace: &std::path::Path,
+) -> (Option<String>, Option<String>) {
+    (
+        std::fs::read_to_string(dirs.config_file()).ok(),
+        std::fs::read_to_string(workspace.join(".helix/config.toml")).ok(),
+    )
+}
+
+fn helix_button(button: MouseButton) -> Option<HelixButton> {
+    match button {
+        MouseButton::Left => Some(HelixButton::Left),
+        MouseButton::Right => Some(HelixButton::Right),
+        MouseButton::Middle => Some(HelixButton::Middle),
+        _ => None,
+    }
+}
+
+/// The platform text-input side (IME, dead keys, the emoji picker).
+///
+/// Helix owns the document, so this handler exposes no document text: the
+/// only text it knows is the current composition, and a commit is replayed
+/// into Helix as typed keys. Plain keys never come through here — they are
+/// taken by the keystroke interceptor first — except while an IME composes.
+impl EntityInputHandler for HelixEditor {
+    fn text_for_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        adjusted: &mut Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        let marked = self.marked.as_deref().unwrap_or_default();
+        let range = utf16_to_byte_range(marked, range);
+        *adjusted = Some(byte_to_utf16_range(marked, range.clone()));
+        Some(marked[range].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let end = self.marked.as_deref().map_or(0, utf16_len);
+        Some(UTF16Selection {
+            range: end..end,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<std::ops::Range<usize>> {
+        self.marked.as_deref().map(|marked| 0..utf16_len(marked))
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.marked.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.marked = None;
+        for key in keys::text_to_helix(text) {
+            self.send_key(key);
+        }
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.marked = (!text.is_empty()).then(|| text.to_string());
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _: std::ops::Range<usize>,
+        _: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        // Candidate windows anchor under the cursor cell.
+        let g = self.geometry?;
+        let (col, row) = self.frame.as_ref()?.cursor?;
+        Some(g.helix_cell(col as usize, row as usize))
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _: Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+
+    fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
+        self.host.is_some() && self.frame.as_ref().is_some_and(|frame| frame.accepts_text)
+    }
+}
+
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+fn utf16_to_byte_range(text: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    let byte = |utf16: usize| {
+        let mut count = 0;
+        for (ix, ch) in text.char_indices() {
+            if count >= utf16 {
+                return ix;
+            }
+            count += ch.len_utf16();
+        }
+        text.len()
+    };
+    let (start, end) = (byte(range.start), byte(range.end));
+    start.min(end)..end
+}
+
+fn byte_to_utf16_range(text: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    utf16_len(&text[..range.start])..utf16_len(&text[..range.end])
+}
+
+impl Focusable for HelixEditor {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl Render for HelixEditor {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = crate::fonts::ide_theme(Theme::of(cx));
+        let banner = match (&self.status, &self.config_error) {
+            (EditorStatus::Exited(Some(err)), _) => Some((err.clone(), theme.danger)),
+            (EditorStatus::Exited(None), _) => Some(("Editor closed".into(), theme.text_muted)),
+            (EditorStatus::Running, Some(err)) => Some((err.clone(), theme.warning)),
+            (EditorStatus::Running, None) => None,
+        };
+        let tabs = self.render_tabs(&theme, cx);
+        let grid = div()
+            .id("helix-grid")
+            .flex_1()
+            .min_h_0()
+            .relative()
+            .cursor_text()
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_mouse_down))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up(MouseButton::Right, cx.listener(Self::on_mouse_up))
+            .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .child(HelixGrid {
+                editor: cx.entity(),
+            })
+            .children(self.render_docs(&theme, window))
+            .children(self.render_signature(&theme, window))
+            .children(self.render_preview_image());
+        div()
+            .id("helix-editor")
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .font_family(crate::fonts::UI_FONT)
+            .size_full()
+            .relative()
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .children(tabs)
+            .child(grid)
+            .when_some(banner, |this, (message, color)| {
+                this.child(
+                    div()
+                        .absolute()
+                        .bottom(px(12.0))
+                        .left(px(12.0))
+                        .right(px(12.0))
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .rounded(px(Theme::CONTROL_RADIUS))
+                        .bg(theme.surface_dialog)
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_size(px(12.0))
+                        .text_color(color)
+                        .child(message),
+                )
+            })
+    }
+}
+
+impl HelixEditor {
+    /// Helix's documentation popups (hover, completion docs, prompt help),
+    /// drawn the way Zed draws them (see [`Self::popup_card`]).
+    fn render_docs(&self, theme: &Theme, window: &Window) -> Vec<gpui::AnyElement> {
+        let Some(frame) = self.frame.as_ref() else {
+            return Vec::new();
+        };
+        // Keep only the docs still on screen.
+        self.doc_cache
+            .borrow_mut()
+            .retain(|markdown, _| frame.docs.iter().any(|doc| &doc.markdown == markdown));
+        frame
+            .docs
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, doc)| {
+                let parsed = parsed_doc(&self.doc_cache, &doc.markdown);
+                let body = doc_blocks(&parsed, &format!("helix-doc-{ix}"), theme, window);
+                self.popup_card(
+                    ("helix-doc", ix),
+                    doc.area,
+                    doc.anchor,
+                    div().flex().flex_col().gap(px(6.0)).children(body),
+                    theme,
+                )
+            })
+            .collect()
+    }
+
+    /// A floating card over the grid, Zed's hover style: an opaque (or
+    /// frosted) surface, hairline border, small radius, no inner boxes.
+    ///
+    /// A cursor popup (`Below` / `Above`) keeps the edge next to the cursor
+    /// where Helix put it and sizes itself to its content, up to Helix's
+    /// width and the room to the grid's edge, scrolling past that. A `Fill`
+    /// view covers exactly the cells Helix drew.
+    fn popup_card(
+        &self,
+        id: impl Into<ElementId>,
+        area: helix_view::graphics::Rect,
+        anchor: crate::host::Anchor,
+        body: gpui::Div,
+        theme: &Theme,
+    ) -> Option<gpui::AnyElement> {
+        use crate::host::Anchor;
+        let g = self.geometry?;
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        let first = g.helix_cell(area.x as usize, area.y as usize);
+        let last = g.helix_cell(
+            (area.x + area.width).saturating_sub(1) as usize,
+            (area.y + area.height).saturating_sub(1) as usize,
+        );
+        let mut top = first.origin.y - self.grid_origin.y;
+        let mut bottom = last.origin.y + g.line_h - self.grid_origin.y;
+        // While the prompt holds the statusline row, its help and
+        // completions sit one row higher (see paint.rs).
+        if g.prompt && anchor == Anchor::Fill {
+            top -= g.line_h;
+            bottom -= g.line_h;
+        }
+        let left = first.origin.x - self.grid_origin.x;
+        let width = last.origin.x + g.cell_w - first.origin.x;
+        // The grid's text area: under the top padding, above the statusline.
+        let grid_top = g.origin.y - self.grid_origin.y;
+        let grid_bottom =
+            g.cell(0, g.rows.saturating_sub(1) as usize).origin.y - self.grid_origin.y;
+        let grid_height = grid_bottom + g.line_h;
+        let fill = if theme.is_frost() {
+            theme.glass_overlay()
+        } else {
+            theme.surface_dialog
+        };
+        let card = div()
+            .id(id)
+            .rounded(px(POPUP_RADIUS))
+            .bg(fill)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_md()
+            .py(px(8.0))
+            .overflow_y_scroll()
+            .text_size(px(theme.code_font_size))
+            .text_color(theme.text)
+            .child(body);
+        // Room for the card's own padding beyond Helix's one-cell margin,
+        // within the grid.
+        let grid_right = g.cell(g.cols as usize, 0).origin.x - self.grid_origin.x;
+        let width = (width + px(2.0 * (POPUP_PAD_X + 1.0)) - g.cell_w * 2.0)
+            .max(width)
+            .min(grid_right - left);
+        // Helix picks a side when at least a few rows fit; the card is taller
+        // than Helix's estimate, so it opens on the side with more room when
+        // the room below is short.
+        let anchor = match anchor {
+            Anchor::Below => {
+                let cursor_top = top - g.line_h;
+                let (below, above) = (grid_bottom - top, cursor_top - grid_top);
+                if below < g.line_h * POPUP_MIN_ROWS && above > below {
+                    bottom = cursor_top;
+                    Anchor::Above
+                } else {
+                    Anchor::Below
+                }
+            }
+            anchor => anchor,
+        };
+        let outer = div().absolute().left(left).occlude();
+        let (outer, card) = match anchor {
+            Anchor::Fill => (outer.top(top).w(width).h(bottom - top), card.size_full()),
+            Anchor::Below => (
+                outer.top(top).max_w(width),
+                card.max_h((grid_bottom - top - px(4.0)).max(g.line_h * 3.0)),
+            ),
+            Anchor::Above => (
+                outer
+                    .bottom((grid_height - bottom).max(px(0.0)))
+                    .max_w(width),
+                card.max_h((bottom - grid_top).max(g.line_h * 3.0)),
+            ),
+        };
+        Some(
+            outer
+                .child(zeron_ui::frost::frosted(
+                    POPUP_RADIUS,
+                    zeron_ui::frost::MENU_BLUR,
+                    card,
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// LSP signature help, Zed-style: the signature in the code font,
+    /// syntax-highlighted with the active parameter washed in the accent,
+    /// then a hairline and its documentation.
+    fn render_signature(&self, theme: &Theme, window: &Window) -> Option<gpui::AnyElement> {
+        let view = self.frame.as_ref()?.signature.as_ref()?;
+        let runs = signature_highlights(view, theme);
+        let signature = gpui::StyledText::new(view.signature.clone()).with_highlights(runs);
+        let doc = view.doc.as_deref().map(|doc| {
+            let parsed = parsed_doc(&self.doc_cache, doc);
+            doc_blocks(&parsed, "helix-signature", theme, window)
+        });
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .px(px(POPUP_PAD_X))
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_family(theme.font_mono.clone())
+                            .text_color(theme.code_text)
+                            .child(signature),
+                    )
+                    .children(view.index.clone().map(|index| {
+                        div()
+                            .flex_none()
+                            .text_size(px(12.0))
+                            .text_color(theme.text_faint)
+                            .child(index)
+                    })),
+            )
+            .children(doc.map(|blocks| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(popup_rule(theme))
+                    .children(blocks)
+            }));
+        self.popup_card("helix-signature", view.area, view.anchor, body, theme)
+    }
+
+    /// An image file selected in a picker, fitted into the preview body.
+    fn render_preview_image(&self) -> Option<gpui::AnyElement> {
+        let (frame, g) = (self.frame.as_ref()?, self.geometry?);
+        let preview = frame.picker.as_ref()?.preview.as_ref()?;
+        let path = crate::picker::preview_image(preview)?;
+        let a = preview.inner;
+        if a.height < 3 {
+            return None;
+        }
+        // Below the title row, with a little air.
+        let first = g.helix_cell(a.x as usize, (a.y + 1) as usize);
+        let last = g.helix_cell(
+            (a.x + a.width).saturating_sub(1) as usize,
+            (a.y + a.height).saturating_sub(1) as usize,
+        );
+        let origin = first.origin - self.grid_origin;
+        let size = last.origin + point(g.cell_w, g.line_h) - first.origin;
+        Some(
+            div()
+                .absolute()
+                .left(origin.x)
+                .top(origin.y)
+                .w(size.x)
+                .h(size.y)
+                .p(px(12.0))
+                .child(
+                    gpui::img(path.to_path_buf())
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Contain),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The open-buffer tab strip: Zeron chrome over Helix's buffer list.
+    /// Hidden while the only buffer is an untouched scratch buffer.
+    ///
+    /// Tabs are attached, like an editor's: each is a full-height cell with a
+    /// file icon, the name (plus its folder when two open files share a
+    /// name) and a close button. The active tab opens onto the editor (no
+    /// wash, no hairline under it) with an accent line on top; the others sit
+    /// on the strip's wash. The close button shows on the active and hovered
+    /// tab; an unsaved buffer shows a dot there until hovered.
+    fn render_tabs(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        use zeron_ui::{file_icons, icons, theme as tokens};
+
+        let buffers = &self.frame.as_ref()?.buffers;
+        let only_scratch = buffers.len() == 1
+            && buffers[0].path == helix_view::document::SCRATCH_BUFFER_NAME
+            && !buffers[0].modified;
+        if buffers.is_empty() || only_scratch {
+            return None;
+        }
+        let strip_wash = tokens::ink(0.035);
+        let hairline = theme.border;
+        let tabs = buffers.iter().enumerate().map(|(ix, tab)| {
+            let id = tab.id;
+            let active = tab.active;
+            let group: SharedString = format!("helix-tab-{ix}").into();
+            let hint = tab_hint(buffers, ix);
+            let icon = file_icons::icon(
+                file_icons::FileIconIdentity::file(&tab.name),
+                theme.appearance,
+            )
+            .size(px(14.0))
+            .when(!active, |icon| icon.opacity(0.7));
+            let close = div()
+                .id(("helix-tab-close", ix))
+                .flex_none()
+                .size(px(18.0))
+                .rounded(px(4.0))
+                .relative()
+                .hover(|el| el.bg(tokens::wash(0.12)))
+                .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.close_buffer(id);
+                }))
+                // Unsaved: a dot, swapped for the close icon on hover.
+                .when(tab.modified, |el| {
+                    el.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .group_hover(group.clone(), |s| s.opacity(0.0))
+                            .child(div().size(px(7.0)).rounded_full().bg(if active {
+                                theme.text_muted
+                            } else {
+                                theme.text_faint
+                            })),
+                    )
+                })
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(tab.modified || !active, |el| el.opacity(0.0))
+                        .group_hover(group.clone(), |s| s.opacity(1.0))
+                        .child(
+                            zeron_ui::icons::icon(icons::CLOSE)
+                                .size(px(14.0))
+                                .text_color(theme.text_muted),
+                        ),
+                );
+            div()
+                .id(("helix-tab", ix))
+                .group(group.clone())
+                .relative()
+                .h_full()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(7.0))
+                .pl(px(12.0))
+                .pr(px(6.0))
+                .border_r_1()
+                .border_color(hairline)
+                .cursor_pointer()
+                .text_size(px(12.5))
+                .when(active, |el| {
+                    el.text_color(theme.text).child(
+                        // Accent line along the top.
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(1.5))
+                            .bg(theme.accent),
+                    )
+                })
+                .when(!active, |el| {
+                    el.text_color(theme.text_muted)
+                        .bg(strip_wash)
+                        .border_b_1()
+                        .hover(|el| el.text_color(theme.text))
+                })
+                .tooltip(zeron_ui::settings::widgets::text_tooltip(tab.path.clone()))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    window.focus(&this.focus, cx);
+                    if let Some(host) = &this.host {
+                        host.call(move |app| {
+                            app.editor.switch(id, helix_view::editor::Action::Replace)
+                        });
+                    }
+                }))
+                // Middle-click closes, like every tab strip.
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.close_buffer(id);
+                    }),
+                )
+                .child(icon)
+                .child(
+                    div()
+                        .flex()
+                        .items_baseline()
+                        .gap(px(6.0))
+                        .whitespace_nowrap()
+                        .child(tab.name.clone())
+                        .children(hint.map(|hint| {
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(theme.text_faint)
+                                .child(hint)
+                        })),
+                )
+                .child(close)
+        });
+        Some(
+            div()
+                .id("helix-tabs")
+                .flex_none()
+                .h(px(36.0))
+                .flex()
+                .overflow_x_scroll()
+                .children(tabs)
+                // The rest of the strip.
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(16.0))
+                        .h_full()
+                        .bg(strip_wash)
+                        .border_b_1()
+                        .border_color(hairline),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Close a buffer from its tab; unsaved changes keep it open with a note.
+    fn close_buffer(&self, id: helix_view::DocumentId) {
+        let Some(host) = &self.host else { return };
+        host.call(move |app| {
+            if let Err(err) = app.editor.close_document(id, false) {
+                use helix_view::editor::CloseError;
+                let message = match err {
+                    CloseError::BufferModified(name) => {
+                        format!("{name} has unsaved changes (:w to save, :bc! to discard)")
+                    }
+                    CloseError::SaveError(err) => format!("{err:#}"),
+                    CloseError::DoesNotExist => return,
+                };
+                app.editor.set_error(message);
+            }
+        });
+    }
+}
+
+/// The folder shown beside a tab's name when another open buffer has the
+/// same name: the nearest parent directory that tells them apart.
+fn tab_hint(buffers: &[crate::host::BufferTab], ix: usize) -> Option<String> {
+    let tab = &buffers[ix];
+    let twins: Vec<&crate::host::BufferTab> = buffers
+        .iter()
+        .enumerate()
+        .filter(|&(other, b)| other != ix && b.name == tab.name)
+        .map(|(_, b)| b)
+        .collect();
+    if twins.is_empty() {
+        return None;
+    }
+    let dirs = |path: &str| -> Vec<String> {
+        let mut parts: Vec<String> = path.split('/').map(str::to_string).collect();
+        parts.pop();
+        parts
+    };
+    let own = dirs(&tab.path);
+    // The shortest trailing run of folders no twin shares.
+    for depth in 1..=own.len() {
+        let suffix = &own[own.len() - depth..];
+        let clash = twins.iter().any(|twin| {
+            let theirs = dirs(&twin.path);
+            theirs.len() >= depth && theirs[theirs.len() - depth..] == *suffix
+        });
+        if !clash {
+            return Some(suffix.join("/"));
+        }
+    }
+    own.last().cloned()
+}
+
+/// Paints the latest frame and measures the grid.
+struct HelixGrid {
+    editor: Entity<HelixEditor>,
+}
+
+impl IntoElement for HelixGrid {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for HelixGrid {
+    type RequestLayoutState = ();
+    type PrepaintState = GridPaint;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = relative(1.).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) -> GridPaint {
+        let theme = crate::fonts::ide_theme(Theme::of(cx));
+        let mono = paint::grid_font(&theme);
+        let font_size = px(theme.code_font_size);
+        let font_id = window.text_system().resolve_font(&mono);
+        let cell_w = window
+            .text_system()
+            .em_advance(font_id, font_size)
+            .unwrap_or(px(theme.code_font_size * 0.6));
+        let line_h = px((theme.code_font_size * LINE_HEIGHT).round());
+        let inner_w = f32::from(bounds.size.width) - 2.0 * PADDING;
+        let inner_h = f32::from(bounds.size.height) - PADDING;
+        let cols = ((inner_w / f32::from(cell_w)).floor() as i64).clamp(2, 1000) as u16;
+        let rows = ((inner_h / f32::from(line_h)).floor() as i64).clamp(1, 1000) as u16;
+        // The code starts under the top padding and the statusline sits on
+        // the bottom edge; the fractional-row remainder goes between them.
+        let origin = point(bounds.left() + px(PADDING), bounds.top() + px(PADDING));
+        let slack = (bounds.bottom() - origin.y - line_h * rows as f32).max(px(0.0));
+        // The prompt holds the cursor on Helix's message line (row `rows`).
+        let prompt = self
+            .editor
+            .read(cx)
+            .frame
+            .as_ref()
+            .is_some_and(|frame| frame.cursor.is_some_and(|(_, row)| row >= rows));
+        let geometry = Geometry {
+            origin,
+            cell_w,
+            line_h,
+            cols,
+            rows,
+            prompt,
+            slack,
+        };
+        let (frame, focused, focus, marked, modeless) = self.editor.update(cx, |editor, _| {
+            editor.on_geometry(geometry, bounds.origin);
+            (
+                editor.frame.clone(),
+                editor.focus.is_focused(window),
+                editor.focus.clone(),
+                editor.marked.clone(),
+                keymap::is_modeless(editor.settings.keymap),
+            )
+        });
+        let Some(frame) = frame else {
+            return GridPaint::empty(line_h, focus);
+        };
+        let mut grid = paint::paint_frame(
+            &frame, &geometry, &theme, &mono, font_size, focused, focus, modeless, window,
+        );
+        grid.marked = marked.zip(frame.cursor).map(|(text, cursor)| {
+            paint::marked_text(text, cursor, &geometry, &theme, &mono, font_size, window)
+        });
+        // The caret moves to the end of the composition while it shows.
+        if let Some((backing, _, _)) = &grid.marked {
+            grid.cursor = grid.cursor.take().map(|mut cursor| {
+                cursor.bounds.origin.x = backing.bounds.origin.x + backing.bounds.size.width;
+                cursor
+            });
+        }
+        grid
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        paint: &mut GridPaint,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let theme = crate::fonts::ide_theme(Theme::of(cx));
+        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+            paint.paint(&theme, window, cx);
+        });
+        window.handle_input(
+            &paint.focus,
+            ElementInputHandler::new(bounds, self.editor.clone()),
+            cx,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_named_tabs_show_the_folder_that_tells_them_apart() {
+        let tab = |path: &str| crate::host::BufferTab {
+            id: Default::default(),
+            name: path.rsplit('/').next().unwrap().into(),
+            path: path.into(),
+            modified: false,
+            active: false,
+        };
+        let buffers = vec![
+            tab("crates/ide/src/view.rs"),
+            tab("crates/ui/src/terminal/view.rs"),
+            tab("crates/ui/src/browser/view.rs"),
+            tab("vendor/a/src/lib.rs"),
+            tab("vendor/b/src/lib.rs"),
+            tab("README.md"),
+        ];
+        let hints: Vec<Option<String>> = (0..buffers.len())
+            .map(|ix| tab_hint(&buffers, ix))
+            .collect();
+        assert_eq!(
+            hints,
+            vec![
+                Some("src".into()),
+                Some("terminal".into()),
+                Some("browser".into()),
+                Some("a/src".into()),
+                Some("b/src".into()),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn signature_runs_mark_the_active_parameter() {
+        let theme = zeron_ui::theme::Theme::dark();
+        let view = crate::host::SignatureView {
+            language: "rust".into(),
+            signature: "fn add(a: i32, b: i32) -> i32".into(),
+            active_param: Some((15, 21)),
+            ..Default::default()
+        };
+        let runs = signature_highlights(&view, &theme);
+        // Runs are sorted and never overlap.
+        assert!(runs.windows(2).all(|w| w[0].0.end <= w[1].0.start));
+        let active: Vec<_> = runs
+            .iter()
+            .filter(|(_, style)| style.background_color.is_some())
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(active.first().map(|r| r.start), Some(15));
+        assert_eq!(active.last().map(|r| r.end), Some(21));
+    }
+
+    #[test]
+    fn single_newlines_become_hard_breaks_outside_fences() {
+        assert_eq!(
+            hard_breaks("type: file\npath: x"),
+            "type: file\\\npath: x\n"
+        );
+        assert_eq!(hard_breaks("a\n\nb"), "a\n\nb\n");
+        assert_eq!(
+            hard_breaks("```rust\nfn a()\nfn b()\n```\ndoc"),
+            "```rust\nfn a()\nfn b()\n```\ndoc\n"
+        );
+    }
+
+    #[test]
+    fn utf16_ranges_map_onto_composition_bytes() {
+        let text = "にほんご😀";
+        assert_eq!(utf16_len(text), 6);
+        assert_eq!(utf16_to_byte_range(text, 0..2), 0..6);
+        assert_eq!(utf16_to_byte_range(text, 4..6), 12..16);
+        assert_eq!(utf16_to_byte_range(text, 0..99), 0..text.len());
+        assert_eq!(byte_to_utf16_range(text, 3..16), 1..6);
+    }
+}

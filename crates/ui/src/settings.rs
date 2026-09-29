@@ -21,6 +21,7 @@ pub mod appearance;
 pub mod archived;
 pub mod composer;
 pub mod devices;
+pub mod editor;
 pub mod files;
 pub mod harnesses;
 pub mod notifications;
@@ -895,6 +896,10 @@ pub struct UiSettings {
     pub wallpaper_color: Option<zeron_theme::Color>,
     /// Non-destructive treatment composited inside the artwork's fade mask.
     pub new_thread_background_effect: NewThreadBackgroundEffect,
+    /// Agent / IDE half the main window last showed.
+    pub workspace_mode: crate::ide::WorkspaceMode,
+    /// Editor options for IDE mode (layered under Helix's `config.toml`).
+    pub ide: crate::ide::IdeSettings,
     /// Pre-theme settings used `accentColor`. Read it once, migrate to
     /// [`Self::accent`], and never write it again.
     #[serde(default, rename = "accentColor", skip_serializing)]
@@ -977,6 +982,8 @@ impl Default for UiSettings {
             wallpaper_theme_colors: false,
             wallpaper_color: None,
             new_thread_background_effect: NewThreadBackgroundEffect::None,
+            workspace_mode: crate::ide::WorkspaceMode::default(),
+            ide: crate::ide::IdeSettings::default(),
             legacy_accent_color: None,
         }
     }
@@ -1019,6 +1026,7 @@ pub enum ShortcutId {
     ToggleChanges,
     ToggleFiles,
     ToggleTerminal,
+    ToggleIde,
     NewSession,
     NewProject,
     OpenModelPicker,
@@ -1029,7 +1037,7 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 14 + JUMP_SLOTS] = [
+    pub const ALL: [ShortcutId; 15 + JUMP_SLOTS] = [
         ShortcutId::CaptureAppshot,
         ShortcutId::RandomWallpaper,
         ShortcutId::SaveFile,
@@ -1038,6 +1046,7 @@ impl ShortcutId {
         ShortcutId::ToggleChanges,
         ShortcutId::ToggleFiles,
         ShortcutId::ToggleTerminal,
+        ShortcutId::ToggleIde,
         ShortcutId::NewSession,
         ShortcutId::NewProject,
         ShortcutId::OpenModelPicker,
@@ -1070,6 +1079,7 @@ impl ShortcutId {
             ShortcutId::ToggleChanges => "Toggle right sidebar",
             ShortcutId::ToggleFiles => "Toggle files panel",
             ShortcutId::ToggleTerminal => "Toggle terminal",
+            ShortcutId::ToggleIde => "Switch between Agent and IDE",
             ShortcutId::NewSession => "New session",
             ShortcutId::NewProject => "New project",
             ShortcutId::OpenModelPicker => "Open model picker",
@@ -1098,6 +1108,7 @@ impl ShortcutId {
             ShortcutId::ToggleChanges => "mod-r",
             ShortcutId::ToggleFiles => "mod-e",
             ShortcutId::ToggleTerminal => "mod-j",
+            ShortcutId::ToggleIde => "mod-shift-i",
             ShortcutId::NewSession => "mod-n",
             ShortcutId::NewProject => "mod-shift-n",
             ShortcutId::OpenModelPicker => "mod-/",
@@ -1146,6 +1157,7 @@ pub struct KeymapConfig {
     pub toggle_changes: String,
     pub toggle_files: String,
     pub toggle_terminal: String,
+    pub toggle_ide: String,
     pub new_session: String,
     pub new_project: String,
     pub open_model_picker: String,
@@ -1211,6 +1223,7 @@ impl Default for KeymapConfig {
             toggle_changes: ShortcutId::ToggleChanges.default_combo().into(),
             toggle_files: ShortcutId::ToggleFiles.default_combo().into(),
             toggle_terminal: ShortcutId::ToggleTerminal.default_combo().into(),
+            toggle_ide: ShortcutId::ToggleIde.default_combo().into(),
             new_session: ShortcutId::NewSession.default_combo().into(),
             new_project: ShortcutId::NewProject.default_combo().into(),
             open_model_picker: ShortcutId::OpenModelPicker.default_combo().into(),
@@ -1233,6 +1246,7 @@ impl KeymapConfig {
             ShortcutId::ToggleChanges => &self.toggle_changes,
             ShortcutId::ToggleFiles => &self.toggle_files,
             ShortcutId::ToggleTerminal => &self.toggle_terminal,
+            ShortcutId::ToggleIde => &self.toggle_ide,
             ShortcutId::NewSession => &self.new_session,
             ShortcutId::NewProject => &self.new_project,
             ShortcutId::OpenModelPicker => &self.open_model_picker,
@@ -1257,6 +1271,7 @@ impl KeymapConfig {
             ShortcutId::ToggleChanges => self.toggle_changes = combo,
             ShortcutId::ToggleFiles => self.toggle_files = combo,
             ShortcutId::ToggleTerminal => self.toggle_terminal = combo,
+            ShortcutId::ToggleIde => self.toggle_ide = combo,
             ShortcutId::NewSession => self.new_session = combo,
             ShortcutId::NewProject => self.new_project = combo,
             ShortcutId::OpenModelPicker => self.open_model_picker = combo,
@@ -2415,6 +2430,13 @@ mod tests {
             wallpaper_theme_colors: false,
             wallpaper_color: None,
             new_thread_background_effect: NewThreadBackgroundEffect::Ascii,
+            workspace_mode: crate::ide::WorkspaceMode::Ide,
+            ide: crate::ide::IdeSettings {
+                keymap: crate::ide::IdeKeymap::Vim,
+                line_numbers: crate::ide::IdeLineNumbers::Relative,
+                soft_wrap: true,
+                cursorline: false,
+            },
             legacy_accent_color: None,
         };
         settings.save(dir.path()).unwrap();

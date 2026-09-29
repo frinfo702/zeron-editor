@@ -30,6 +30,11 @@ install -m 755 "$ROOT/target/release/zeron" "$APP/Contents/MacOS/zeron"
 sed "s/__VERSION__/$VERSION/" "$ROOT/dist/macos/Info.plist" >"$APP/Contents/Info.plist"
 mkdir -p "$APP/Contents/Resources/licenses/fonts"
 cp "$ROOT/crates/ui/assets/fonts/licenses/"* "$APP/Contents/Resources/licenses/fonts/"
+# IDE mode: Helix's queries, themes and tutor (MPL-2.0); grammars are fetched
+# and built at runtime into the data dir, never bundled.
+mkdir -p "$APP/Contents/Resources/helix-runtime" "$APP/Contents/Resources/licenses/helix"
+rsync -a --exclude grammars "$ROOT/vendor/helix/runtime/" "$APP/Contents/Resources/helix-runtime/"
+cp "$ROOT/vendor/helix/LICENSE" "$APP/Contents/Resources/licenses/helix/LICENSE"
 
 # Icon: iconset from the pre-masked macOS icon (squircle + margins + shadow
 # baked into dist/macos/icon-1024.png — sips can't alpha-mask, so the mask is

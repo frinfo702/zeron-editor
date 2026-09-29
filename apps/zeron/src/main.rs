@@ -248,8 +248,10 @@ fn main() -> anyhow::Result<()> {
             let edge_token = std::env::var("ZERON_EDGE_TOKEN").ok();
             // Headed: the UI probes ZERON_IPC_PORT and connects to a running
             // daemon, or embeds the engine in-process (ARCHITECTURE §1).
-            zeron_ui::run_app(zeron_ui::UiConfig {
-                data_dir: paths::data_dir(),
+            let data_dir = paths::data_dir();
+            let ide_data_dir = data_dir.clone();
+            zeron_ui::run_app_with(zeron_ui::UiConfig {
+                data_dir,
                 ipc_port: std::env::var("ZERON_IPC_PORT")
                     .ok()
                     .and_then(|p| p.parse().ok())
@@ -260,7 +262,7 @@ fn main() -> anyhow::Result<()> {
                 org_id: std::env::var("ZERON_ORG_ID").ok(),
                 default_harness: zeron_ui::HarnessId::ClaudeCode,
                 initial_url: cli.open_url,
-            });
+            }, move |cx| zeron_ide::init(&ide_data_dir, cx));
             Ok(())
         }
     }
