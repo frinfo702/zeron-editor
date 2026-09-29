@@ -266,7 +266,14 @@ impl Shell {
         let theme = Theme::of(cx).clone();
         let top = Theme::TITLEBAR_HEIGHT + Theme::TITLEBAR_TOP_PAD;
         let body = match self.active_ide_editor(window, cx) {
-            Ok(editor) => editor.view().into_any_element(),
+            Ok(editor) => {
+                // Launching straight into IDE mode (it persists) leaves
+                // nothing focused; keys would go nowhere until a click.
+                if window.focused(cx).is_none() {
+                    window.focus(&editor.focus_handle(cx), cx);
+                }
+                editor.view().into_any_element()
+            }
             Err(reason) => {
                 let (title, detail) = reason.message();
                 div()
