@@ -6,7 +6,16 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Review fixture with offscreen capture (render_to_image).
+fixture = ["dep:gpui_platform", "gpui_platform/test-support", "gpui/test-support"]
+
+[[example]]
+name = "ide-fixture"
+required-features = ["fixture"]
+
 [dependencies]
+gpui_platform = { workspace = true, optional = true }
 helix-core = { path = "../../vendor/helix/helix-core" }
 helix-view = { path = "../../vendor/helix/helix-view" }
 helix-term = { path = "../../vendor/helix/helix-term", default-features = false, features = ["git", "headless"] }
@@ -21,6 +30,7 @@ zeron-ui.workspace = true
 toml = "0.8"
 serde.workspace = true
 tokio.workspace = true
+futures.workspace = true
 tokio-stream = "0.1"
 tracing.workspace = true
 # Provides the tree-sitter C runtime for Helix (see .cargo/config.toml).
@@ -28,5 +38,8 @@ tracing.workspace = true
 tree-sitter = "=0.26.11"
 
 [dev-dependencies]
+gpui_tokio.workspace = true
+zeron-theme.workspace = true
+tracing-subscriber.workspace = true
 tempfile.workspace = true
 zeron-syntax.workspace = true

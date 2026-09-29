@@ -13820,7 +13820,10 @@ name = "zeron-ide"
 version = "0.2.98"
 dependencies = [
  "anyhow",
+ "futures",
  "gpui",
+ "gpui_platform",
+ "gpui_tokio",
  "helix-core",
  "helix-event",
  "helix-loader",
@@ -13835,8 +13838,10 @@ dependencies = [
  "tokio-stream",
  "toml 0.8.23",
  "tracing",
+ "tracing-subscriber",
  "tree-sitter",
  "zeron-syntax",
+ "zeron-theme",
  "zeron-ui",
 ]
 

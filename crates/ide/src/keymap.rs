@@ -252,6 +252,8 @@ const GUI_EDITOR_DEFAULTS: &str = r#"
 [editor]
 true-color = true
 bufferline = "never"
+# The view turns trackpad pixels into one event per line.
+scroll-lines = 1
 [editor.cursor-shape]
 insert = "bar"
 "#;
