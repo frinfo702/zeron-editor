@@ -152,7 +152,14 @@ use Token::*;
 const SCOPES: &[ScopeStyle] = &[
     // ---- editor chrome ----
     ("ui.text", Some(Text), None, &[], None),
-    ("ui.text.focus", Some(TextStrong), None, &["bold"], None),
+    // The picker's selected row: a menu-style highlight rather than bold.
+    (
+        "ui.text.focus",
+        Some(TextStrong),
+        Some(MenuSelected),
+        &[],
+        None,
+    ),
     ("ui.text.inactive", Some(TextFaint), None, &[], None),
     ("ui.text.info", Some(TextMuted), None, &[], None),
     ("ui.text.directory", Some(Accent), None, &[], None),

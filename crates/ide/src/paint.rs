@@ -353,6 +353,16 @@ pub(crate) fn find_cards(
 // Frame → paint
 // ---------------------------------------------------------------------------
 
+/// How a background run is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Rect,
+    /// Statusline mode badge.
+    Pill,
+    /// A menu or picker's selected row inside a card.
+    Rounded,
+}
+
 /// Resolved paint for one cell.
 struct CellPaint {
     fg: Hsla,
@@ -593,24 +603,32 @@ pub(crate) fn paint_frame(
         }
 
         // Backgrounds: one quad per run of equal color within one owner.
-        let mut run: Option<(usize, Hsla, Option<usize>, bool)> = None;
+        let mut run: Option<(usize, Hsla, Option<usize>, Shape)> = None;
         for col in 0..=cols {
             let next = paints.get(col).and_then(|paint| {
-                let badge = paint.bg_token.is_some_and(Token::is_badge);
-                paint.bg.map(|bg| (bg, owners[col], badge))
+                let shape = match paint.bg_token {
+                    Some(token) if token.is_badge() => Shape::Pill,
+                    Some(Token::MenuSelected) if owners[col].is_some() => Shape::Rounded,
+                    _ => Shape::Rect,
+                };
+                paint.bg.map(|bg| (bg, owners[col], shape))
             });
             match (run, next) {
                 (Some((_, color, owner, _)), Some((bg, next_owner, _)))
                     if color == bg && owner == next_owner => {}
                 (current, next) => {
-                    if let Some((start, color, owner, badge)) = current {
+                    if let Some((start, color, owner, shape)) = current {
                         let cells = Bounds::new(
                             point(x0 + g.cell_w * start as f32, y - lift_of(owner)),
                             size(g.cell_w * (col - start) as f32, g.line_h),
                         );
-                        let quad = if badge {
-                            // Mode badge: a pill inset from the row.
-                            let inset = (g.line_h * 0.18).round();
+                        let quad = if shape != Shape::Rect {
+                            // Mode badge: a pill inset from the row; a
+                            // menu's selected row: a rounded highlight.
+                            let inset = match shape {
+                                Shape::Pill => (g.line_h * 0.18).round(),
+                                _ => px(1.0),
+                            };
                             let pill = Bounds::from_corners(
                                 point(cells.origin.x, cells.origin.y + inset),
                                 point(
@@ -618,9 +636,13 @@ pub(crate) fn paint_frame(
                                     cells.origin.y + cells.size.height - inset,
                                 ),
                             );
+                            let radius = match shape {
+                                Shape::Pill => pill.size.height / 2.0,
+                                _ => px(Theme::CONTROL_RADIUS),
+                            };
                             quad(
                                 pill,
-                                Corners::all(pill.size.height / 2.0),
+                                Corners::all(radius),
                                 color,
                                 px(0.0),
                                 color,
@@ -634,7 +656,7 @@ pub(crate) fn paint_frame(
                             None => base.quads.push(quad),
                         }
                     }
-                    run = next.map(|(color, owner, badge)| (col, color, owner, badge));
+                    run = next.map(|(color, owner, shape)| (col, color, owner, shape));
                 }
             }
         }
