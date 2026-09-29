@@ -1,11 +1,10 @@
 //! IDE mode's fonts.
 //!
-//! The editor is set in Zed's own faces, bundled so it looks the same
-//! everywhere: Zed Sans for its chrome (tabs, pickers, menus, docs popups)
-//! and Zed Mono for code. Both are Iosevka builds under the SIL Open Font
-//! License, subset here to the scripts an editor shows (Latin, Greek,
-//! Cyrillic, punctuation, symbols, box drawing, braille) without hinting. The
-//! rest of Zeron keeps its own fonts.
+//! The editor uses the faces Zed ships as its defaults, bundled unmodified
+//! from Zed's `assets/fonts` so it looks the same everywhere: IBM Plex Sans
+//! for its chrome (tabs, pickers, menus, docs popups) and Lilex for code.
+//! Both are under the SIL Open Font License. The rest of Zeron keeps its own
+//! fonts.
 
 use std::borrow::Cow;
 
@@ -13,21 +12,19 @@ use gpui::App;
 use zeron_ui::theme::Theme;
 
 /// Family of the interface faces.
-pub const UI_FONT: &str = "Zed Sans";
+pub const UI_FONT: &str = "IBM Plex Sans";
 /// Family of the code faces.
-pub const CODE_FONT: &str = "Zed Mono";
+pub const CODE_FONT: &str = "Lilex";
 
-const FACES: [&[u8]; 10] = [
-    include_bytes!("../assets/fonts/zed-sans-regular.ttf"),
-    include_bytes!("../assets/fonts/zed-sans-medium.ttf"),
-    include_bytes!("../assets/fonts/zed-sans-semibold.ttf"),
-    include_bytes!("../assets/fonts/zed-sans-bold.ttf"),
-    include_bytes!("../assets/fonts/zed-mono-regular.ttf"),
-    include_bytes!("../assets/fonts/zed-mono-italic.ttf"),
-    include_bytes!("../assets/fonts/zed-mono-medium.ttf"),
-    include_bytes!("../assets/fonts/zed-mono-semibold.ttf"),
-    include_bytes!("../assets/fonts/zed-mono-bold.ttf"),
-    include_bytes!("../assets/fonts/zed-mono-bolditalic.ttf"),
+const FACES: [&[u8]; 8] = [
+    include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexSans-Italic.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexSans-SemiBoldItalic.ttf"),
+    include_bytes!("../assets/fonts/Lilex-Regular.ttf"),
+    include_bytes!("../assets/fonts/Lilex-Italic.ttf"),
+    include_bytes!("../assets/fonts/Lilex-Bold.ttf"),
+    include_bytes!("../assets/fonts/Lilex-BoldItalic.ttf"),
 ];
 
 struct Registered;
