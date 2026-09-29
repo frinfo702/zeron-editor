@@ -215,6 +215,11 @@ impl HelixHost {
         let _ = self.input.send(Input::Call(Box::new(call)));
     }
 
+    /// Like [`Self::call`], but redraws only when `poll` returns `true`.
+    pub fn poll(&self, poll: impl FnOnce(&mut Application) -> bool + Send + 'static) {
+        let _ = self.input.send(Input::Poll(Box::new(poll)));
+    }
+
     /// Take the newest frame, if one arrived since the last take.
     pub fn take_frame(&self) -> Option<Frame> {
         self.frames.latest.lock().unwrap().take()

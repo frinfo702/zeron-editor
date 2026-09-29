@@ -1,6 +1,7 @@
 //! IDE mode: Helix's editor model, commands and keymaps painted with gpui.
 //!
 //! - [`integration`] — registration with the Zeron shell ([`init`]);
+//! - [`disk`] — reloading buffers an agent edited on disk;
 //! - [`dirs`] — where Helix's config, runtime and grammars live;
 //! - [`host`] — the Helix thread and its input/frame channels;
 //! - [`keys`] — gpui keystrokes → Helix key events;
@@ -11,6 +12,7 @@
 //! - `paint` — Helix frames → gpui paint, floating layers as Zeron cards.
 
 pub mod dirs;
+pub mod disk;
 pub mod host;
 pub mod integration;
 pub mod keymap;

@@ -18,7 +18,7 @@ use gpui::{
     EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
     ScrollDelta, ScrollWheelEvent, SharedString, Style, Subscription, Task, UTF16Selection, Window,
-    div, point, prelude::*, px, relative, size,
+    div, point, prelude::*, px, relative,
 };
 use helix_view::{
     document::Mode,
@@ -40,6 +40,8 @@ pub const KEY_CONTEXT: &str = "HelixEditor";
 
 /// Line height as a multiple of the code font size.
 const LINE_HEIGHT: f32 = 1.5;
+/// How often open files are checked for changes made on disk.
+const DISK_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
 /// Inset between the view edge and the first cell.
 const PADDING: f32 = 4.0;
 
@@ -92,6 +94,7 @@ pub struct HelixEditor {
     /// to Helix until the IME commits it.
     marked: Option<String>,
     _wake: Task<()>,
+    _disk_sync: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -166,6 +169,26 @@ impl HelixEditor {
             }
         });
 
+        // Pick up files an agent (or anything else) changed on disk.
+        let disk_sync = cx.spawn(async move |this, cx| {
+            let state = Arc::new(std::sync::Mutex::new(crate::disk::DiskSync::default()));
+            loop {
+                cx.background_executor().timer(DISK_SYNC_INTERVAL).await;
+                let alive = this.update(cx, |this, _| {
+                    if let Some(host) = &this.host {
+                        let state = state.clone();
+                        host.poll(move |app| {
+                            let report = crate::disk::sync(app, &mut state.lock().unwrap());
+                            !report.reloaded.is_empty() || !report.conflicted.is_empty()
+                        });
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        });
+
         let focus = cx.focus_handle();
         let weak = cx.entity().downgrade();
         let intercept = cx.intercept_keystrokes(move |event, window, cx| {
@@ -204,6 +227,7 @@ impl HelixEditor {
             scroll_carry: 0.0,
             marked: None,
             _wake: wake,
+            _disk_sync: disk_sync,
             _subscriptions: vec![intercept, focus_in, focus_out],
         }
     }

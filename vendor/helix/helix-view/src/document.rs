@@ -1181,6 +1181,12 @@ impl Document {
         }
     }
 
+    /// zeron: when the document last matched its file on disk (load, reload
+    /// or save), for a host watching for external edits.
+    pub fn last_saved_time(&self) -> SystemTime {
+        self.last_saved_time
+    }
+
     pub fn pickup_last_saved_time(&mut self) {
         self.last_saved_time = match self.path() {
             Some(path) => match path.metadata() {

@@ -1251,6 +1251,9 @@ pub mod headless {
         Event(Event),
         /// Run arbitrary code against the application, then redraw.
         Call(Box<dyn FnOnce(&mut Application) + Send>),
+        /// Run code that redraws only when it returns `true` (polling that
+        /// usually finds nothing to do).
+        Poll(Box<dyn FnOnce(&mut Application) -> bool + Send>),
     }
 
     impl Application {
@@ -1322,6 +1325,11 @@ pub mod headless {
                         Some(Input::Call(call)) => {
                             call(self);
                             self.render().await;
+                        }
+                        Some(Input::Poll(poll)) => {
+                            if poll(self) {
+                                self.render().await;
+                            }
                         }
                         None => return,
                     },

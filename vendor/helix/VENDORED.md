@@ -41,3 +41,5 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
   layer, so the host knows when text input (and so the IME) applies.
 - `helix-term/src/ui/picker.rs`: pickers clear with `ui.picker` when a theme
   defines it (else `ui.background`), so the host can find and restyle them.
+- `helix-view/src/document.rs`: `last_saved_time()` getter, so the host can
+  tell a file changed on disk (an agent's edit) from Helix's own save.
