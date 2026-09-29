@@ -68,6 +68,27 @@ impl SignatureHelp {
 }
 
 impl Component for SignatureHelp {
+    // zeron: see ui/host_view.rs. The popup holding it fills in the area.
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        let Some(signature) = self
+            .signatures
+            .get(self.active_signature)
+            .or_else(|| self.signatures.first())
+        else {
+            return Vec::new();
+        };
+        vec![crate::ui::host_view::HostView::Signature(
+            crate::ui::host_view::SignatureView {
+                area: Default::default(),
+                language: self.language.clone(),
+                signature: signature.signature.clone(),
+                active_param: signature.active_param_range,
+                index: (self.signatures.len() > 1).then(|| self.signature_index()),
+                doc: signature.signature_doc.clone(),
+            },
+        )]
+    }
+
     fn handle_event(&mut self, event: &Event, _cx: &mut Context) -> EventResult {
         let Event::Key(event) = event else {
             return EventResult::Ignored(None);

@@ -71,6 +71,21 @@ const HEADER_HEIGHT: u16 = 1;
 const SEPARATOR_HEIGHT: u16 = 1;
 
 impl Component for Hover {
+    // zeron: see ui/host_view.rs. The popup holding it fills in the area.
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        let (header, contents) = self.content();
+        let markdown = match header {
+            Some(header) => format!("{}\n\n---\n\n{}", header.contents(), contents.contents()),
+            None => contents.contents().to_string(),
+        };
+        vec![crate::ui::host_view::HostView::Doc(
+            crate::ui::host_view::DocView {
+                area: Default::default(),
+                markdown,
+            },
+        )]
+    }
+
     fn render(&mut self, area: Rect, surface: &mut Buffer, cx: &mut Context) {
         let margin = Margin::all(1);
         let area = area.inner(margin);

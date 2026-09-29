@@ -582,8 +582,12 @@ pub(crate) fn paint_frame(
     let native_info = frame.info.as_ref().map(|info| info.area);
     let native_prompt = frame.prompt.as_ref().map(|prompt| prompt.area);
     // Docs popups are drawn by the view as Markdown overlays: blank here.
-    let native_docs: Vec<helix_view::graphics::Rect> =
-        frame.docs.iter().map(|doc| doc.area).collect();
+    let native_docs: Vec<helix_view::graphics::Rect> = frame
+        .docs
+        .iter()
+        .map(|doc| doc.area)
+        .chain(frame.signature.iter().map(|signature| signature.area))
+        .collect();
     let contains = |rect: helix_view::graphics::Rect, col: usize, row: usize| {
         (rect.x as usize..(rect.x + rect.width) as usize).contains(&col)
             && (rect.y as usize..(rect.y + rect.height) as usize).contains(&row)
@@ -620,13 +624,7 @@ pub(crate) fn paint_frame(
         })
         .filter(|rect| rect.col1 < cols && rect.row1 < rows)
         .collect();
-    let in_doc = |col: usize, row: usize| {
-        frame.docs.iter().any(|doc| {
-            let a = doc.area;
-            (a.x as usize..(a.x + a.width) as usize).contains(&col)
-                && (a.y as usize..(a.y + a.height) as usize).contains(&row)
-        })
-    };
+    let in_doc = |col: usize, row: usize| native_docs.iter().any(|&a| contains(a, col, row));
     let mut rects = find_cards(cols, rows, |col, row| {
         is_overlay(col, row)
             && !known.iter().any(|rect| rect.contains(col, row))

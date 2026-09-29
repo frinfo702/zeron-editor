@@ -518,6 +518,58 @@ impl HelixEditor {
     }
 }
 
+/// Styles for a signature: syntax colors from zeron-syntax, and the active
+/// parameter washed in the accent (and semibold). Byte ranges, sorted and
+/// non-overlapping as `StyledText` requires.
+fn signature_highlights(
+    view: &crate::host::SignatureView,
+    theme: &Theme,
+) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+    let text = view.signature.as_str();
+    let mut colors: Vec<Option<gpui::Hsla>> = vec![None; text.len()];
+    let highlighted = zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+        source: text,
+        path: None,
+        fence_tag: Some(view.language.as_str()),
+    });
+    if let Ok(document) = highlighted {
+        let mut line_start = 0;
+        for (line, spans) in text.split_inclusive('\n').zip(&document.lines) {
+            for span in spans {
+                let range = (line_start + span.range.start).min(text.len())
+                    ..(line_start + span.range.end).min(text.len());
+                for byte in range {
+                    colors[byte] = Some(theme.syntax.color(span.kind));
+                }
+            }
+            line_start += line.len();
+        }
+    }
+    let active = view
+        .active_param
+        .map(|(start, end)| start.min(text.len())..end.min(text.len()));
+    let style_at = |byte: usize| {
+        let is_active = active.as_ref().is_some_and(|range| range.contains(&byte));
+        gpui::HighlightStyle {
+            color: colors[byte],
+            background_color: is_active.then_some(theme.accent_wash),
+            font_weight: is_active.then_some(gpui::FontWeight::SEMIBOLD),
+            ..Default::default()
+        }
+    };
+    let mut runs: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = Vec::new();
+    for (byte, _) in text.char_indices() {
+        let style = style_at(byte);
+        let len = text[byte..].chars().next().map_or(1, char::len_utf8);
+        match runs.last_mut() {
+            Some((range, last)) if *last == style && range.end == byte => range.end = byte + len,
+            _ => runs.push((byte..byte + len, style)),
+        }
+    }
+    runs.retain(|(_, style)| *style != gpui::HighlightStyle::default());
+    runs
+}
+
 /// A docs popup's Markdown, parsed, with its code blocks highlighted.
 struct ParsedDoc {
     tree: zeron_markdown::BlockTree,
@@ -532,7 +584,7 @@ fn parsed_doc(
     if let Some(parsed) = cache.borrow().get(markdown) {
         return parsed.clone();
     }
-    let tree = zeron_markdown::parse_full(&hard_breaks(markdown));
+    let mut tree = zeron_markdown::parse_full(&hard_breaks(markdown));
     let highlights = tree
         .blocks
         .iter()
@@ -549,6 +601,13 @@ fn parsed_doc(
             _ => None,
         })
         .collect();
+    // A popup has no room for a fence's language header; the highlight
+    // already carries the language.
+    for top in &mut tree.blocks {
+        if let zeron_markdown::Block::CodeBlock { language, .. } = &mut Arc::make_mut(top).block {
+            *language = None;
+        }
+    }
     let parsed = Rc::new(ParsedDoc { tree, highlights });
     cache
         .borrow_mut()
@@ -772,7 +831,8 @@ impl Render for HelixEditor {
             .child(HelixGrid {
                 editor: cx.entity(),
             })
-            .children(self.render_docs(&theme, window));
+            .children(self.render_docs(&theme, window))
+            .children(self.render_signature(&theme, window));
         div()
             .id("helix-editor")
             .key_context(KEY_CONTEXT)
@@ -878,6 +938,95 @@ impl HelixEditor {
                     .into_any_element()
             })
             .collect()
+    }
+
+    /// LSP signature help as a Zeron card: the signature in the code font,
+    /// syntax-highlighted with the active parameter washed in the accent,
+    /// then its documentation as Markdown.
+    fn render_signature(&self, theme: &Theme, window: &Window) -> Option<gpui::AnyElement> {
+        let (frame, g) = (self.frame.as_ref()?, self.geometry?);
+        let view = frame.signature.as_ref()?;
+        let a = view.area;
+        let first = g.helix_cell(a.x as usize, a.y as usize);
+        let last = g.helix_cell(
+            (a.x + a.width).saturating_sub(1) as usize,
+            (a.y + a.height).saturating_sub(1) as usize,
+        );
+        let origin = first.origin - self.grid_origin;
+        let extent = last.origin + point(g.cell_w, g.line_h) - first.origin;
+        let runs = signature_highlights(view, theme);
+        let signature = gpui::StyledText::new(view.signature.clone()).with_highlights(runs);
+        let doc = view.doc.as_deref().map(|doc| {
+            let parsed = parsed_doc(&self.doc_cache, doc);
+            let opts = zeron_ui::markdown::render::RenderOptions::settled("helix-signature".into());
+            zeron_ui::markdown::render::render_tree(&parsed.tree, &opts, theme, window, &|block| {
+                parsed.highlights.get(block).cloned().flatten()
+            })
+        });
+        let fill = if theme.is_frost() {
+            theme.glass_overlay()
+        } else {
+            theme.surface_dialog
+        };
+        Some(
+            div()
+                .absolute()
+                .left(origin.x)
+                .top(origin.y)
+                .w(extent.x)
+                .h(extent.y)
+                .occlude()
+                .child(zeron_ui::frost::frosted(
+                    Theme::PANEL_RADIUS,
+                    zeron_ui::frost::MENU_BLUR,
+                    div()
+                        .id("helix-signature")
+                        .size_full()
+                        .rounded(px(Theme::PANEL_RADIUS))
+                        .bg(fill)
+                        .border_1()
+                        .border_color(theme.border)
+                        .shadow_md()
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .font_family(theme.font_mono.clone())
+                                        .text_size(px(theme.code_font_size))
+                                        .text_color(theme.code_text)
+                                        .child(signature),
+                                )
+                                .children(view.index.clone().map(|index| {
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(12.0))
+                                        .text_color(theme.text_faint)
+                                        .child(index)
+                                })),
+                        )
+                        .children(doc.map(|doc| {
+                            div()
+                                .pt(px(6.0))
+                                .border_t_1()
+                                .border_color(theme.border)
+                                .text_size(px(13.0))
+                                .text_color(theme.text)
+                                .child(doc)
+                        })),
+                ))
+                .into_any_element(),
+        )
     }
 
     /// The open-buffer tab strip: Zeron chrome over Helix's buffer list.
@@ -1105,6 +1254,27 @@ impl Element for HelixGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signature_runs_mark_the_active_parameter() {
+        let theme = zeron_ui::theme::Theme::dark();
+        let view = crate::host::SignatureView {
+            language: "rust".into(),
+            signature: "fn add(a: i32, b: i32) -> i32".into(),
+            active_param: Some((15, 21)),
+            ..Default::default()
+        };
+        let runs = signature_highlights(&view, &theme);
+        // Runs are sorted and never overlap.
+        assert!(runs.windows(2).all(|w| w[0].0.end <= w[1].0.start));
+        let active: Vec<_> = runs
+            .iter()
+            .filter(|(_, style)| style.background_color.is_some())
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(active.first().map(|r| r.start), Some(15));
+        assert_eq!(active.last().map(|r| r.end), Some(21));
+    }
 
     #[test]
     fn single_newlines_become_hard_breaks_outside_fences() {

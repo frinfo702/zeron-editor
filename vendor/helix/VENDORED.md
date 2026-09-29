@@ -55,3 +55,6 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
   reports its source, `Popup` sets a doc's area to its own, and `Completion`
   records the docs it renders beside its menu (`contents()` added to
   `Markdown`).
+- `Prompt` records a `PromptView` (its completion grid) and reports its help
+  text as a doc; `SignatureHelp` reports a `SignatureView` (signatures,
+  active parameter range, docs); `Hover` reports the active hover as a doc.

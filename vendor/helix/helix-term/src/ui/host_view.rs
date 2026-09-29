@@ -67,8 +67,25 @@ pub struct PromptView {
     pub selected: Option<usize>,
 }
 
+/// Signature help as last rendered.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SignatureView {
+    /// Filled in by the popup holding it.
+    pub area: Rect,
+    /// Language of the signature, for highlighting.
+    pub language: String,
+    pub signature: String,
+    /// Byte range of the active parameter in `signature`.
+    pub active_param: Option<(usize, usize)>,
+    /// `(n/m)` when there are several signatures.
+    pub index: Option<String>,
+    /// Markdown documentation of the signature.
+    pub doc: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostView {
+    Signature(SignatureView),
     Picker(PickerView),
     Menu(MenuView),
     Doc(DocView),

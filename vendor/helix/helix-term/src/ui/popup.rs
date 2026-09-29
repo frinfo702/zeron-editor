@@ -254,8 +254,12 @@ impl<T: Component> Component for Popup<T> {
     fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
         let mut views = self.contents.host_views();
         for view in &mut views {
-            if let crate::ui::host_view::HostView::Doc(doc) = view {
-                doc.area = self.area;
+            match view {
+                crate::ui::host_view::HostView::Doc(doc) => doc.area = self.area,
+                crate::ui::host_view::HostView::Signature(signature) => {
+                    signature.area = self.area
+                }
+                _ => {}
             }
         }
         views
