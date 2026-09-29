@@ -39,3 +39,5 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
   - `compositor` and `jobs` on `Application` are `pub` for the host.
 - `helix-term/src/compositor.rs`: `top_type_name` reports the front-most
   layer, so the host knows when text input (and so the IME) applies.
+- `helix-term/src/ui/picker.rs`: pickers clear with `ui.picker` when a theme
+  defines it (else `ui.background`), so the host can find and restyle them.

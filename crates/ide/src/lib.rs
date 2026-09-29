@@ -6,13 +6,15 @@
 //! - [`keys`] — gpui keystrokes → Helix key events;
 //! - [`keymap`] — Standard / Vim / Helix keymap modes over Helix's commands;
 //! - [`theme`] — Zeron's theme as token-indexed Helix colors;
-//! - [`view`] — the gpui editor surface painting Helix frames.
+//! - [`view`] — the gpui editor surface;
+//! - `paint` — Helix frames → gpui paint, floating layers as Zeron cards.
 
 pub mod dirs;
-pub mod integration;
 pub mod host;
+pub mod integration;
 pub mod keymap;
 pub mod keys;
+mod paint;
 pub mod theme;
 pub mod view;
 

@@ -50,7 +50,12 @@ fn edits_and_saves_a_file_through_the_host() {
     });
     let frame = last.unwrap();
     assert_eq!(frame.buffer.area.width, 80);
-    let screen: String = frame.buffer.content.iter().map(|c| c.symbol.as_str()).collect();
+    let screen: String = frame
+        .buffer
+        .content
+        .iter()
+        .map(|c| c.symbol.as_str())
+        .collect();
     assert!(screen.contains("world"), "document not painted");
 
     for k in ["i", "h", "e", "l", "l", "o", "space"] {
@@ -78,7 +83,12 @@ fn edits_and_saves_a_file_through_the_host() {
     let mut screen = String::new();
     wait_until("scratch buffer", || {
         if let Some(frame) = host.take_frame() {
-            screen = frame.buffer.content.iter().map(|c| c.symbol.as_str()).collect();
+            screen = frame
+                .buffer
+                .content
+                .iter()
+                .map(|c| c.symbol.as_str())
+                .collect();
         }
         screen.contains("[scratch]")
     });

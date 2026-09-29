@@ -7,8 +7,8 @@
 //! `key_char` and chords use `key`.
 
 use gpui::Keystroke;
-use helix_view::keyboard::{KeyCode, KeyModifiers};
 use helix_view::input::KeyEvent;
+use helix_view::keyboard::{KeyCode, KeyModifiers};
 
 pub fn to_helix(keystroke: &Keystroke) -> Option<KeyEvent> {
     let mods = &keystroke.modifiers;

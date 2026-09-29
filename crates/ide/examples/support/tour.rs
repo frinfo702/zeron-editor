@@ -49,12 +49,17 @@ async fn tour(
         }
         // Let Helix render and the frame reach the view.
         cx.background_executor()
-            .timer(std::time::Duration::from_millis(if ix == 0 { 2500 } else { 700 }))
+            .timer(std::time::Duration::from_millis(if ix == 0 {
+                2500
+            } else {
+                700
+            }))
             .await;
         window.update(cx, |_, w, cx| -> anyhow::Result<()> {
             w.refresh();
             w.draw(cx).clear();
-            w.render_to_image()?.save(dir.join(format!("shot-{ix}.png")))?;
+            w.render_to_image()?
+                .save(dir.join(format!("shot-{ix}.png")))?;
             Ok(())
         })??;
     }

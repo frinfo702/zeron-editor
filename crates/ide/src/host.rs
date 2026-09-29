@@ -60,9 +60,7 @@ impl Frame {
 fn accepts_text(frame: &HelixFrame<'_>) -> bool {
     let top = frame.compositor.top_type_name().unwrap_or_default();
     // Picker embeds a Prompt, so both names cover filtering pickers too.
-    top.contains("Prompt")
-        || top.contains("Picker")
-        || frame.editor.mode() == Mode::Insert
+    top.contains("Prompt") || top.contains("Picker") || frame.editor.mode() == Mode::Insert
 }
 
 #[derive(Default)]
@@ -114,10 +112,17 @@ impl HelixHost {
                     on_exit,
                 } = options;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run(workspace, files, config, host_config, input_rx, move |frame| {
-                        *sink_frames.latest.lock().unwrap() = Some(Frame::capture(&frame));
-                        on_frame();
-                    })
+                    run(
+                        workspace,
+                        files,
+                        config,
+                        host_config,
+                        input_rx,
+                        move |frame| {
+                            *sink_frames.latest.lock().unwrap() = Some(Frame::capture(&frame));
+                            on_frame();
+                        },
+                    )
                 }))
                 .unwrap_or_else(|panic| {
                     let message = panic

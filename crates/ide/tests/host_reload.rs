@@ -53,7 +53,9 @@ fn config_reload_keeps_host_layers() {
     })
     .unwrap();
     host.send(Event::Resize(80, 24));
-    for k in [":", "c", "o", "n", "f", "i", "g", "-", "r", "e", "l", "o", "a", "d", "ret"] {
+    for k in [
+        ":", "c", "o", "n", "f", "i", "g", "-", "r", "e", "l", "o", "a", "d", "ret",
+    ] {
         host.send(key(k));
     }
     for k in ["i", "t", "w", "o", " ", "esc", "Cmd-s"] {

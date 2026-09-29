@@ -32,27 +32,29 @@ pub fn init(data_dir: &std::path::Path, cx: &mut App) {
     // process, created on first use and re-pointed for every later request.
     let editor: Rc<RefCell<Option<Entity<HelixEditor>>>> = Rc::default();
     ide::register(
-        Rc::new(move |request: IdeRequest, window: &mut Window, cx: &mut App| {
-            if let Some(editor) = editor.borrow().clone() {
-                editor.update(cx, |editor, cx| editor.set_workspace(request.workspace, cx));
-                return Rc::new(Handle(editor)) as Rc<dyn IdeEditor>;
-            }
-            let dirs = factory_dirs.clone();
-            let created = cx.new(|cx| {
-                HelixEditor::new(
-                    EditorOptions {
-                        dirs,
-                        workspace: request.workspace,
-                        files: Vec::new(),
-                        settings: request.settings,
-                    },
-                    window,
-                    cx,
-                )
-            });
-            *editor.borrow_mut() = Some(created.clone());
-            Rc::new(Handle(created)) as Rc<dyn IdeEditor>
-        }),
+        Rc::new(
+            move |request: IdeRequest, window: &mut Window, cx: &mut App| {
+                if let Some(editor) = editor.borrow().clone() {
+                    editor.update(cx, |editor, cx| editor.set_workspace(request.workspace, cx));
+                    return Rc::new(Handle(editor)) as Rc<dyn IdeEditor>;
+                }
+                let dirs = factory_dirs.clone();
+                let created = cx.new(|cx| {
+                    HelixEditor::new(
+                        EditorOptions {
+                            dirs,
+                            workspace: request.workspace,
+                            files: Vec::new(),
+                            settings: request.settings,
+                        },
+                        window,
+                        cx,
+                    )
+                });
+                *editor.borrow_mut() = Some(created.clone());
+                Rc::new(Handle(created)) as Rc<dyn IdeEditor>
+            },
+        ),
         services,
         cx,
     );

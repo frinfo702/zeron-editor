@@ -56,6 +56,13 @@ use self::handlers::{DynamicQueryChange, DynamicQueryHandler, PreviewHighlightHa
 
 pub const ID: &str = "picker";
 
+// zeron: see the `ui.picker` note in `render_picker`.
+fn picker_background(theme: &helix_view::Theme) -> helix_view::graphics::Style {
+    theme
+        .try_get_exact("ui.picker")
+        .unwrap_or_else(|| theme.get("ui.background"))
+}
+
 pub const MIN_AREA_WIDTH_FOR_PREVIEW: u16 = 72;
 /// Biggest file size to preview in bytes
 pub const MAX_FILE_SIZE_FOR_PREVIEW: u64 = 10 * 1024 * 1024;
@@ -677,7 +684,9 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
 
         // -- Render the frame:
         // clear area
-        let background = cx.editor.theme.get("ui.background");
+        // zeron: pickers may have their own surface (`ui.picker`) so a host
+        // can tell them from the editor plane; themes without it are unchanged.
+        let background = picker_background(&cx.editor.theme);
         surface.clear_with(area, background);
 
         const BLOCK: Block<'_> = Block::bordered();
@@ -864,7 +873,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     fn render_preview(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         // -- Render the frame:
         // clear area
-        let background = cx.editor.theme.get("ui.background");
+        let background = picker_background(&cx.editor.theme);
         let text = cx.editor.theme.get("ui.text");
         let directory = cx.editor.theme.get("ui.text.directory");
         surface.clear_with(area, background);

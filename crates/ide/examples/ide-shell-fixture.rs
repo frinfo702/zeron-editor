@@ -92,24 +92,30 @@ fn main() -> anyhow::Result<()> {
                 s.connection = zeron_proto::view::ConnectionStatus::Ready;
                 s.workspace_scope = Some(zeron_proto::WorkspaceScope::Local);
                 s.local_device_id = Some("local".into());
-                s.devices = vec![serde_json::from_value(serde_json::json!({
-                    "id": "local", "name": "This device",
-                    "platform": std::env::consts::OS, "lastSeenAt": null
-                }))
-                .unwrap()];
-                s.spaces = vec![serde_json::from_value(serde_json::json!({
-                    "id": "project", "deviceId": "local", "path": path,
-                    "createdAt": "2026-09-29T00:00:00Z"
-                }))
-                .unwrap()];
-                s.chats = vec![serde_json::from_value(serde_json::json!({
-                    "id": "chat", "deviceId": "local", "spaceId": "project",
-                    "title": "Port Helix into the IDE", "archived": false,
-                    "cwd": path, "createdAt": "2026-09-29T00:00:00Z",
-                    "config": {"harness": "claude-code", "model": "claude-sonnet-4-6",
-                               "reasoning": null, "sandbox": "workspace-write"}
-                }))
-                .unwrap()];
+                s.devices = vec![
+                    serde_json::from_value(serde_json::json!({
+                        "id": "local", "name": "This device",
+                        "platform": std::env::consts::OS, "lastSeenAt": null
+                    }))
+                    .unwrap(),
+                ];
+                s.spaces = vec![
+                    serde_json::from_value(serde_json::json!({
+                        "id": "project", "deviceId": "local", "path": path,
+                        "createdAt": "2026-09-29T00:00:00Z"
+                    }))
+                    .unwrap(),
+                ];
+                s.chats = vec![
+                    serde_json::from_value(serde_json::json!({
+                        "id": "chat", "deviceId": "local", "spaceId": "project",
+                        "title": "Port Helix into the IDE", "archived": false,
+                        "cwd": path, "createdAt": "2026-09-29T00:00:00Z",
+                        "config": {"harness": "claude-code", "model": "claude-sonnet-4-6",
+                                   "reasoning": null, "sandbox": "workspace-write"}
+                    }))
+                    .unwrap(),
+                ];
                 s.selected_chat = Some("chat".into());
                 s.selected_space = Some("project".into());
                 s.auto_selected = true;

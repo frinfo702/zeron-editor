@@ -37,7 +37,8 @@ macro_rules! tokens {
 }
 
 tokens! {
-    Text => |t: &Theme| t.code_text,
+    // Neutral body text: `code_text` is the accent-tinted inline-code color.
+    Text => |t: &Theme| t.text,
     TextStrong => |t: &Theme| t.text,
     TextMuted => |t: &Theme| t.text_muted,
     TextFaint => |t: &Theme| t.text_faint,
@@ -55,7 +56,12 @@ tokens! {
     Border => |t: &Theme| t.border,
     Hover => |t: &Theme| t.element_hover,
     Active => |t: &Theme| t.element_active,
-    Popup => |t: &Theme| t.surface_dialog,
+    // Overlay family: cells painted with these belong to a floating card
+    // (picker, popup, menu, info box) that the view draws as Zeron chrome.
+    Overlay => |t: &Theme| t.surface_dialog,
+    MenuSelected => |t: &Theme| t.element_active,
+    MenuScroll => |t: &Theme| t.element_hover,
+    OverlayHighlight => |t: &Theme| t.element_hover,
     StatusBar => |t: &Theme| t.surface_raised,
     ModeNormal => |t: &Theme| t.element_active,
     ModeSelect => |t: &Theme| t.warning_muted,
@@ -100,8 +106,26 @@ impl Token {
         TOKEN_BASE + self as u8
     }
 
+    /// Whether a background in this token marks a floating-card cell.
+    pub fn is_overlay(self) -> bool {
+        matches!(
+            self,
+            Token::Overlay | Token::MenuSelected | Token::MenuScroll | Token::OverlayHighlight
+        )
+    }
+
+    /// The token behind a painted color, if it is one.
+    pub fn of(color: Color) -> Option<Self> {
+        match color {
+            Color::Indexed(ix) => Self::from_index(ix),
+            _ => None,
+        }
+    }
+
     fn from_index(index: u8) -> Option<Self> {
-        Self::ALL.get(index.checked_sub(TOKEN_BASE)? as usize).copied()
+        Self::ALL
+            .get(index.checked_sub(TOKEN_BASE)? as usize)
+            .copied()
     }
 }
 
@@ -127,7 +151,13 @@ const SCOPES: &[ScopeStyle] = &[
     ("ui.cursor.primary", None, Some(Cursor), &[], None),
     ("ui.cursor.match", None, Some(MatchBracket), &[], None),
     ("ui.selection", None, Some(Selection), &[], None),
-    ("ui.selection.primary", None, Some(SelectionPrimary), &[], None),
+    (
+        "ui.selection.primary",
+        None,
+        Some(SelectionPrimary),
+        &[],
+        None,
+    ),
     ("ui.cursorline.primary", None, Some(CursorLine), &[], None),
     ("ui.linenr", Some(TextDim), None, &[], None),
     ("ui.linenr.selected", Some(TextMuted), None, &[], None),
@@ -138,32 +168,94 @@ const SCOPES: &[ScopeStyle] = &[
     ("ui.virtual.jump-label", Some(Accent), None, &["bold"], None),
     ("ui.virtual.wrap", Some(TextDim), None, &[], None),
     ("ui.statusline", Some(TextMuted), Some(StatusBar), &[], None),
-    ("ui.statusline.inactive", Some(TextFaint), Some(StatusBar), &[], None),
-    ("ui.statusline.normal", Some(TextStrong), Some(ModeNormal), &["bold"], None),
-    ("ui.statusline.insert", Some(OnAccent), Some(Accent), &["bold"], None),
-    ("ui.statusline.select", Some(TextStrong), Some(ModeSelect), &["bold"], None),
+    (
+        "ui.statusline.inactive",
+        Some(TextFaint),
+        Some(StatusBar),
+        &[],
+        None,
+    ),
+    (
+        "ui.statusline.normal",
+        Some(TextStrong),
+        Some(ModeNormal),
+        &["bold"],
+        None,
+    ),
+    (
+        "ui.statusline.insert",
+        Some(OnAccent),
+        Some(Accent),
+        &["bold"],
+        None,
+    ),
+    (
+        "ui.statusline.select",
+        Some(TextStrong),
+        Some(ModeSelect),
+        &["bold"],
+        None,
+    ),
     ("ui.statusline.separator", Some(TextDim), None, &[], None),
     ("ui.bufferline", Some(TextMuted), Some(StatusBar), &[], None),
-    ("ui.bufferline.active", Some(TextStrong), Some(Active), &[], None),
-    ("ui.popup", Some(Text), Some(Popup), &[], None),
-    ("ui.popup.info", Some(Text), Some(Popup), &[], None),
+    (
+        "ui.bufferline.active",
+        Some(TextStrong),
+        Some(Active),
+        &[],
+        None,
+    ),
+    ("ui.popup", Some(Text), Some(Overlay), &[], None),
+    ("ui.popup.info", Some(Text), Some(Overlay), &[], None),
     ("ui.window", Some(Border), None, &[], None),
-    ("ui.help", Some(Text), Some(Popup), &[], None),
-    ("ui.menu", Some(Text), Some(Popup), &[], None),
-    ("ui.menu.selected", Some(TextStrong), Some(Active), &[], None),
-    ("ui.menu.scroll", Some(TextFaint), Some(Hover), &[], None),
+    ("ui.help", Some(Text), Some(Overlay), &[], None),
+    ("ui.menu", Some(Text), Some(Overlay), &[], None),
+    (
+        "ui.menu.selected",
+        Some(TextStrong),
+        Some(MenuSelected),
+        &[],
+        None,
+    ),
+    (
+        "ui.menu.scroll",
+        Some(TextFaint),
+        Some(MenuScroll),
+        &[],
+        None,
+    ),
+    ("ui.picker", None, Some(Overlay), &[], None),
     ("ui.picker.header", Some(TextMuted), None, &["bold"], None),
-    ("ui.highlight", None, Some(Hover), &[], None),
-    ("ui.highlight.frameline", None, Some(Hover), &[], None),
+    ("ui.background.separator", Some(Border), None, &[], None),
+    ("ui.highlight", None, Some(OverlayHighlight), &[], None),
+    (
+        "ui.highlight.frameline",
+        None,
+        Some(OverlayHighlight),
+        &[],
+        None,
+    ),
     // ---- diagnostics / vcs ----
     ("error", Some(Danger), None, &[], None),
     ("warning", Some(Warning), None, &[], None),
     ("info", Some(Accent), None, &[], None),
     ("hint", Some(TextMuted), None, &[], None),
     ("diagnostic.error", None, None, &[], Some((Danger, "curl"))),
-    ("diagnostic.warning", None, None, &[], Some((Warning, "curl"))),
+    (
+        "diagnostic.warning",
+        None,
+        None,
+        &[],
+        Some((Warning, "curl")),
+    ),
     ("diagnostic.info", None, None, &[], Some((Accent, "curl"))),
-    ("diagnostic.hint", None, None, &[], Some((TextMuted, "dotted"))),
+    (
+        "diagnostic.hint",
+        None,
+        None,
+        &[],
+        Some((TextMuted, "dotted")),
+    ),
     ("diagnostic.unnecessary", None, None, &["dim"], None),
     ("diagnostic.deprecated", None, None, &["crossed_out"], None),
     ("diff.plus", Some(DiffAdd), None, &[], None),
@@ -226,7 +318,12 @@ pub fn helix_theme() -> helix_view::Theme {
         if !modifiers.is_empty() {
             style.insert(
                 "modifiers".into(),
-                Value::Array(modifiers.iter().map(|m| Value::String((*m).into())).collect()),
+                Value::Array(
+                    modifiers
+                        .iter()
+                        .map(|m| Value::String((*m).into()))
+                        .collect(),
+                ),
             );
         }
         if let Some((token, kind)) = underline {
@@ -320,6 +417,20 @@ mod tests {
         assert_eq!(keyword.fg, Some(Color::Indexed(Token::Keyword.index())));
         // No editor plane: the Zeron surface shows through.
         assert_eq!(theme.get("ui.background").bg, None);
+        // Floating surfaces are marked so the view can draw them as cards.
+        for scope in [
+            "ui.picker",
+            "ui.popup",
+            "ui.menu",
+            "ui.help",
+            "ui.popup.info",
+        ] {
+            let bg = theme.try_get_exact(scope).and_then(|style| style.bg);
+            assert!(
+                bg.and_then(Token::of).is_some_and(Token::is_overlay),
+                "{scope} is not an overlay surface"
+            );
+        }
     }
 
     #[test]

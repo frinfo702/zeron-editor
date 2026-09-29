@@ -306,7 +306,10 @@ mod tests {
         for mode in KeymapMode::ALL {
             let config = build_config(&with(mode), None, None).unwrap();
             for helix_mode in [Mode::Normal, Mode::Select, Mode::Insert] {
-                assert!(bound(&config, helix_mode, "Cmd-s"), "{mode:?} {helix_mode:?}");
+                assert!(
+                    bound(&config, helix_mode, "Cmd-s"),
+                    "{mode:?} {helix_mode:?}"
+                );
             }
         }
     }
@@ -369,7 +372,9 @@ mod tests {
         use helix_view::keyboard::{KeyCode, KeyModifiers};
         let mut parts = vec!["cmd".to_string()];
         let (shift, key) = match event.code {
-            KeyCode::Char(c) if c.is_ascii_uppercase() => (true, c.to_ascii_lowercase().to_string()),
+            KeyCode::Char(c) if c.is_ascii_uppercase() => {
+                (true, c.to_ascii_lowercase().to_string())
+            }
             KeyCode::Char(c) => (false, c.to_string()),
             KeyCode::Left => (false, "left".into()),
             KeyCode::Right => (false, "right".into()),
@@ -402,7 +407,12 @@ mod tests {
         assert!(!config.editor.cursorline);
         // …but the user's file still wins.
         let user = "[editor]\ncursorline = true\n";
-        assert!(build_config(&settings, Some(user), None).unwrap().editor.cursorline);
+        assert!(
+            build_config(&settings, Some(user), None)
+                .unwrap()
+                .editor
+                .cursorline
+        );
     }
 
     #[test]

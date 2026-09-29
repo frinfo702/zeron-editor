@@ -15,14 +15,13 @@ use std::{path::PathBuf, sync::Arc};
 use futures::{StreamExt as _, channel::mpsc};
 use gpui::{
     App, Bounds, Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, GlobalElementId, UTF16Selection, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
-    SharedString, ShapedLine, Style, Subscription, Task, TextRun, Window, div, fill, point,
-    prelude::*, px, relative, size,
+    EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId, IntoElement,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
+    ScrollDelta, ScrollWheelEvent, SharedString, Style, Subscription, Task, UTF16Selection, Window,
+    div, point, prelude::*, px, relative, size,
 };
 use helix_view::{
     document::Mode,
-    graphics::{CursorKind, Modifier, UnderlineStyle},
     input::{Event, MouseButton as HelixButton, MouseEvent, MouseEventKind},
     keyboard::KeyModifiers,
 };
@@ -31,8 +30,9 @@ use zeron_ui::{ide::IdeSettings, theme::Theme};
 use crate::{
     dirs::IdeDirs,
     host::{Frame, HelixHost, HostOptions},
-    keymap,
-    keys, theme,
+    keymap, keys,
+    paint::{self, Geometry, GridPaint},
+    theme,
 };
 
 /// Key context set on the editor; the interceptor only acts inside it.
@@ -66,15 +66,6 @@ impl EventEmitter<EditorEvent> for HelixEditor {}
 enum Wake {
     Frame,
     Exit(Option<String>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Geometry {
-    origin: Point<Pixels>,
-    cell_w: Pixels,
-    line_h: Pixels,
-    cols: u16,
-    rows: u16,
 }
 
 pub struct HelixEditor {
@@ -150,29 +141,23 @@ impl HelixEditor {
                 }
                 (Some(host), EditorStatus::Running)
             }
-            Err(err) => (
-                None,
-                EditorStatus::Exited(Some(format!("{err:#}").into())),
-            ),
+            Err(err) => (None, EditorStatus::Exited(Some(format!("{err:#}").into()))),
         };
 
         let wake = cx.spawn(async move |this, cx| {
             while let Some(wake) = wake_rx.next().await {
-                let alive = this.update(cx, |this, cx| {
-                    match wake {
-                        Wake::Frame => {
-                            if let Some(frame) = this.host.as_ref().and_then(HelixHost::take_frame)
-                            {
-                                this.frame = Some(Arc::new(frame));
-                                cx.notify();
-                            }
-                        }
-                        Wake::Exit(err) => {
-                            this.host = None;
-                            this.status = EditorStatus::Exited(err.map(Into::into));
-                            cx.emit(EditorEvent::Exited);
+                let alive = this.update(cx, |this, cx| match wake {
+                    Wake::Frame => {
+                        if let Some(frame) = this.host.as_ref().and_then(HelixHost::take_frame) {
+                            this.frame = Some(Arc::new(frame));
                             cx.notify();
                         }
+                    }
+                    Wake::Exit(err) => {
+                        this.host = None;
+                        this.status = EditorStatus::Exited(err.map(Into::into));
+                        cx.emit(EditorEvent::Exited);
+                        cx.notify();
                     }
                 });
                 if alive.is_err() {
@@ -292,10 +277,7 @@ impl HelixEditor {
     pub fn open(&self, path: PathBuf) {
         if let Some(host) = &self.host {
             host.call(move |app| {
-                if let Err(err) = app
-                    .editor
-                    .open(&path, helix_view::editor::Action::Replace)
-                {
+                if let Err(err) = app.editor.open(&path, helix_view::editor::Action::Replace) {
                     app.editor.set_error(format!("{}: {err}", path.display()));
                 }
             });
@@ -363,13 +345,22 @@ impl HelixEditor {
         }));
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus, cx);
         let Some(button) = helix_button(event.button) else {
             return;
         };
         self.drag_button = Some(button);
-        self.send_mouse(MouseEventKind::Down(button), event.position, &event.modifiers);
+        self.send_mouse(
+            MouseEventKind::Down(button),
+            event.position,
+            &event.modifiers,
+        );
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
@@ -382,7 +373,11 @@ impl HelixEditor {
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, _: &mut Context<Self>) {
         if let Some(button) = self.drag_button.filter(|_| event.dragging()) {
-            self.send_mouse(MouseEventKind::Drag(button), event.position, &event.modifiers);
+            self.send_mouse(
+                MouseEventKind::Drag(button),
+                event.position,
+                &event.modifiers,
+            );
         }
     }
 
@@ -425,7 +420,10 @@ fn load_config(
 }
 
 /// The user's `config.toml` and the workspace's `.helix/config.toml`.
-fn read_config_files(dirs: &IdeDirs, workspace: &std::path::Path) -> (Option<String>, Option<String>) {
+fn read_config_files(
+    dirs: &IdeDirs,
+    workspace: &std::path::Path,
+) -> (Option<String>, Option<String>) {
     (
         std::fs::read_to_string(dirs.config_file()).ok(),
         std::fs::read_to_string(workspace.join(".helix/config.toml")).ok(),
@@ -474,7 +472,11 @@ impl EntityInputHandler for HelixEditor {
         })
     }
 
-    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<std::ops::Range<usize>> {
+    fn marked_text_range(
+        &self,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<std::ops::Range<usize>> {
         self.marked.as_deref().map(|marked| 0..utf16_len(marked))
     }
 
@@ -634,16 +636,6 @@ impl IntoElement for HelixGrid {
     }
 }
 
-struct GridPaint {
-    quads: Vec<PaintQuad>,
-    lines: Vec<(Point<Pixels>, ShapedLine)>,
-    line_h: Pixels,
-    cursor: Option<PaintQuad>,
-    /// IME composition drawn over the cursor: its backing and text.
-    marked: Option<(PaintQuad, Point<Pixels>, ShapedLine)>,
-    focus: FocusHandle,
-}
-
 impl Element for HelixGrid {
     type RequestLayoutState = ();
     type PrepaintState = GridPaint;
@@ -679,14 +671,7 @@ impl Element for HelixGrid {
         cx: &mut App,
     ) -> GridPaint {
         let theme = Theme::of(cx).clone();
-        // A code grid must advance exactly one cell per character, so
-        // contextual ligatures (`->`, `!=`) are off — see the terminal view.
-        let mut mono = gpui::font(theme.font_mono.clone());
-        mono.features = gpui::FontFeatures(Arc::new(vec![
-            ("liga".into(), 0),
-            ("calt".into(), 0),
-            ("dlig".into(), 0),
-        ]));
+        let mono = paint::grid_font(&theme);
         let font_size = px(theme.code_font_size);
         let font_id = window.text_system().resolve_font(&mono);
         let cell_w = window
@@ -714,54 +699,22 @@ impl Element for HelixGrid {
             )
         });
         let Some(frame) = frame else {
-            return GridPaint {
-                quads: Vec::new(),
-                lines: Vec::new(),
-                line_h,
-                cursor: None,
-                marked: None,
-                focus,
-            };
+            return GridPaint::empty(line_h, focus);
         };
-        let mut paint =
-            paint_frame(&frame, &geometry, &theme, &mono, font_size, focused, focus, window);
-        paint.marked = marked.zip(frame.cursor).map(|(text, (col, row))| {
-            let origin = point(
-                geometry.origin.x + geometry.cell_w * col as f32,
-                geometry.origin.y + geometry.line_h * row as f32,
-            );
-            let len = text.len();
-            let shaped = window.text_system().shape_line(
-                text.into(),
-                font_size,
-                &[TextRun {
-                    len,
-                    font: mono.clone(),
-                    color: theme.text,
-                    background_color: None,
-                    underline: Some(gpui::UnderlineStyle {
-                        color: Some(theme.text),
-                        thickness: px(1.0),
-                        wavy: false,
-                    }),
-                    strikethrough: None,
-                }],
-                None,
-            );
-            let backing = fill(
-                Bounds::new(origin, size(shaped.width, geometry.line_h)),
-                theme.surface_dialog,
-            );
-            (backing, origin, shaped)
+        let mut grid = paint::paint_frame(
+            &frame, &geometry, &theme, &mono, font_size, focused, focus, window,
+        );
+        grid.marked = marked.zip(frame.cursor).map(|(text, cursor)| {
+            paint::marked_text(text, cursor, &geometry, &theme, &mono, font_size, window)
         });
         // The caret moves to the end of the composition while it shows.
-        if let Some((backing, _, _)) = &paint.marked {
-            paint.cursor = paint.cursor.take().map(|mut cursor| {
+        if let Some((backing, _, _)) = &grid.marked {
+            grid.cursor = grid.cursor.take().map(|mut cursor| {
                 cursor.bounds.origin.x = backing.bounds.origin.x + backing.bounds.size.width;
                 cursor
             });
         }
-        paint
+        grid
     }
 
     fn paint(
@@ -774,219 +727,15 @@ impl Element for HelixGrid {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let theme = Theme::of(cx).clone();
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-            for quad in paint.quads.drain(..) {
-                window.paint_quad(quad);
-            }
-            for (origin, line) in &paint.lines {
-                let _ = line.paint(*origin, paint.line_h, gpui::TextAlign::Left, None, window, cx);
-            }
-            if let Some((backing, origin, line)) = paint.marked.take() {
-                window.paint_quad(backing);
-                let _ = line.paint(origin, paint.line_h, gpui::TextAlign::Left, None, window, cx);
-            }
-            if let Some(cursor) = paint.cursor.take() {
-                window.paint_quad(cursor);
-            }
+            paint.paint(&theme, window, cx);
         });
         window.handle_input(
             &paint.focus,
             ElementInputHandler::new(bounds, self.editor.clone()),
             cx,
         );
-    }
-}
-
-/// Resolved paint for one cell.
-struct CellPaint {
-    fg: Hsla,
-    bg: Option<Hsla>,
-    bold: bool,
-    italic: bool,
-    hidden: bool,
-    underline: Option<gpui::UnderlineStyle>,
-    strikethrough: bool,
-}
-
-fn resolve_cell(cell: &tui::buffer::Cell, theme: &Theme) -> CellPaint {
-    let mut fg = theme::resolve(cell.fg, theme).unwrap_or(theme.code_text);
-    let mut bg = theme::resolve(cell.bg, theme);
-    if cell.modifier.contains(Modifier::REVERSED) {
-        let swapped_fg = bg.unwrap_or(theme.bg);
-        bg = Some(fg);
-        fg = swapped_fg;
-    }
-    if cell.modifier.contains(Modifier::DIM) {
-        fg.a *= 0.6;
-    }
-    let underline = match cell.underline_style {
-        UnderlineStyle::Reset => None,
-        style => Some(gpui::UnderlineStyle {
-            color: Some(theme::resolve(cell.underline_color, theme).unwrap_or(fg)),
-            thickness: px(1.0),
-            wavy: matches!(style, UnderlineStyle::Curl),
-        }),
-    };
-    CellPaint {
-        fg,
-        bg,
-        bold: cell.modifier.contains(Modifier::BOLD),
-        italic: cell.modifier.contains(Modifier::ITALIC),
-        hidden: cell.modifier.contains(Modifier::HIDDEN),
-        underline,
-        strikethrough: cell.modifier.contains(Modifier::CROSSED_OUT),
-    }
-}
-
-fn paint_frame(
-    frame: &Frame,
-    g: &Geometry,
-    theme: &Theme,
-    mono: &gpui::Font,
-    font_size: Pixels,
-    focused: bool,
-    focus: FocusHandle,
-    window: &Window,
-) -> GridPaint {
-    let buffer = &frame.buffer;
-    let width = buffer.area.width as usize;
-    let cols = width.min(g.cols as usize);
-    let rows = (buffer.area.height as usize).min(g.rows as usize);
-    let mut quads = Vec::new();
-    let mut lines = Vec::new();
-
-    for row in 0..rows {
-        let y = g.origin.y + g.line_h * row as f32;
-        let cells = &buffer.content[row * width..row * width + cols];
-        let paints: Vec<CellPaint> = cells.iter().map(|cell| resolve_cell(cell, theme)).collect();
-
-        // Backgrounds: one quad per run of equal color.
-        let mut run: Option<(usize, Hsla)> = None;
-        for col in 0..=cols {
-            let bg = paints.get(col).and_then(|paint| paint.bg);
-            match (run, bg) {
-                (Some((_, current)), Some(next)) if current == next => {}
-                (current, next) => {
-                    if let Some((start, color)) = current {
-                        quads.push(fill(
-                            Bounds::new(
-                                point(g.origin.x + g.cell_w * start as f32, y),
-                                size(g.cell_w * (col - start) as f32, g.line_h),
-                            ),
-                            color,
-                        ));
-                    }
-                    run = next.map(|color| (col, color));
-                }
-            }
-        }
-
-        // Text: ASCII runs shape together (guaranteed one cell per char in a
-        // mono font); anything else is pinned to its own column so a
-        // fallback-font glyph cannot shift the rest of the row.
-        let mut text = String::new();
-        let mut runs: Vec<TextRun> = Vec::new();
-        let mut seg_col = 0usize;
-        let mut flush = |text: &mut String, runs: &mut Vec<TextRun>, seg_col: usize| {
-            if text.trim_end().is_empty() {
-                text.clear();
-                runs.clear();
-                return;
-            }
-            let shaped = window.text_system().shape_line(
-                SharedString::from(std::mem::take(text)),
-                font_size,
-                runs,
-                None,
-            );
-            runs.clear();
-            lines.push((point(g.origin.x + g.cell_w * seg_col as f32, y), shaped));
-        };
-        for (col, (cell, paint)) in cells.iter().zip(&paints).enumerate() {
-            let symbol = if paint.hidden || cell.symbol.is_empty() {
-                " "
-            } else {
-                cell.symbol.as_str()
-            };
-            let pinned = !symbol.is_ascii();
-            if pinned {
-                flush(&mut text, &mut runs, seg_col);
-            }
-            if text.is_empty() {
-                seg_col = col;
-            }
-            let mut font = mono.clone();
-            if paint.bold {
-                font.weight = gpui::FontWeight::BOLD;
-            }
-            if paint.italic {
-                font.style = gpui::FontStyle::Italic;
-            }
-            let strikethrough = paint.strikethrough.then_some(gpui::StrikethroughStyle {
-                thickness: px(1.0),
-                color: Some(paint.fg),
-            });
-            text.push_str(symbol);
-            match runs.last_mut() {
-                Some(last)
-                    if last.color == paint.fg
-                        && last.font == font
-                        && last.underline == paint.underline
-                        && last.strikethrough == strikethrough =>
-                {
-                    last.len += symbol.len();
-                }
-                _ => runs.push(TextRun {
-                    len: symbol.len(),
-                    font,
-                    color: paint.fg,
-                    background_color: None,
-                    underline: paint.underline,
-                    strikethrough,
-                }),
-            }
-            if pinned {
-                flush(&mut text, &mut runs, seg_col);
-            }
-        }
-        flush(&mut text, &mut runs, seg_col);
-    }
-
-    // Helix draws block cursors into the grid itself; a bar or underline
-    // cursor is the "terminal" cursor, painted here.
-    let cursor = frame.cursor.and_then(|(col, row)| {
-        let cell = Bounds::new(
-            point(
-                g.origin.x + g.cell_w * col as f32,
-                g.origin.y + g.line_h * row as f32,
-            ),
-            size(g.cell_w, g.line_h),
-        );
-        let color = if focused { theme.caret } else { theme.text_faint };
-        match frame.cursor_kind {
-            CursorKind::Bar => Some(fill(
-                Bounds::new(cell.origin, size(px(2.0), g.line_h)),
-                color,
-            )),
-            CursorKind::Underline => Some(fill(
-                Bounds::new(
-                    point(cell.origin.x, cell.origin.y + g.line_h - px(2.0)),
-                    size(g.cell_w, px(2.0)),
-                ),
-                color,
-            )),
-            CursorKind::Block => Some(fill(cell, theme.cursor)),
-            CursorKind::Hidden => None,
-        }
-    });
-
-    GridPaint {
-        quads,
-        lines,
-        line_h: g.line_h,
-        cursor,
-        marked: None,
-        focus,
     }
 }
 
