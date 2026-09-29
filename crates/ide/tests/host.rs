@@ -60,10 +60,13 @@ fn edits_and_saves_a_file_through_the_host() {
         std::fs::read_to_string(&file).unwrap() == "hello world\n"
     });
 
-    // `:q` on the last view keeps Helix alive with a scratch buffer: Helix
+    // Closing the last view keeps Helix alive with a scratch buffer: Helix
     // state is process-global, so a host never lets its Application exit.
+    // `:q!` because the file on disk can land before Helix marks the buffer
+    // saved, and a plain `:q` in that window refuses to close.
     host.send(key(":"));
     host.send(key("q"));
+    host.send(key("!"));
     host.send(key("ret"));
     let mut screen = String::new();
     wait_until("scratch buffer", || {
