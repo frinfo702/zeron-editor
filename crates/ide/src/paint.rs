@@ -580,6 +580,7 @@ pub(crate) fn paint_frame(
     let native_picker = frame.picker.as_ref().map(crate::picker::inner);
     let native_menu = frame.menu.as_ref().map(|menu| menu.area);
     let native_info = frame.info.as_ref().map(|info| info.area);
+    let native_prompt = frame.prompt.as_ref().map(|prompt| prompt.area);
     // Docs popups are drawn by the view as Markdown overlays: blank here.
     let native_docs: Vec<helix_view::graphics::Rect> =
         frame.docs.iter().map(|doc| doc.area).collect();
@@ -609,6 +610,7 @@ pub(crate) fn paint_frame(
         .iter()
         .map(|menu| menu.area)
         .chain(frame.info.iter().map(|info| info.area))
+        .chain(frame.prompt.iter().map(|prompt| prompt.area))
         .filter(|area| area.width > 0 && area.height > 0)
         .map(|area| CellRect {
             col0: area.x as usize,
@@ -706,6 +708,7 @@ pub(crate) fn paint_frame(
                 if native_picker.is_some_and(|inner| contains(inner, col, row))
                     || native_menu.is_some_and(|area| contains(area, col, row))
                     || native_info.is_some_and(|area| contains(area, col, row))
+                    || native_prompt.is_some_and(|area| contains(area, col, row))
                     || native_docs.iter().any(|&area| contains(area, col, row))
                 {
                     paint.bg = None;
@@ -965,6 +968,16 @@ pub(crate) fn paint_frame(
                 (inner.y + inner.height).saturating_sub(1) as usize,
             );
             let clip = Bounds::from_corners(first.origin, last.origin + point(g.cell_w, g.line_h));
+            cards[card].panes.push((clip, pane));
+        }
+    }
+
+    if let Some(prompt) = &frame.prompt {
+        let area = prompt.area;
+        if let Some(card) = card_of(area.x as usize, area.y as usize) {
+            let mut pane = Layer::default();
+            crate::picker::paint_prompt(prompt, g, theme, window, lifts[card], &mut pane);
+            let clip = cards[card].bounds;
             cards[card].panes.push((clip, pane));
         }
     }

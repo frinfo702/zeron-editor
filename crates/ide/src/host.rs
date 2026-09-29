@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tui::buffer::Buffer;
 
-pub use helix_term::ui::host_view::{DocView, MenuView, PickerView};
+pub use helix_term::ui::host_view::{DocView, MenuView, PickerView, PromptView};
 pub use helix_view::input::Event;
 
 /// An owned snapshot of one Helix render, safe to hand across threads.
@@ -55,8 +55,10 @@ pub struct Frame {
     pub menu: Option<MenuView>,
     /// The pending-keys info box ("which key"), drawn natively.
     pub info: Option<InfoView>,
-    /// Documentation popups (hover, completion docs), as Markdown.
+    /// Documentation popups (hover, completion docs, command help).
     pub docs: Vec<DocView>,
+    /// The command line's completion grid.
+    pub prompt: Option<PromptView>,
 }
 
 /// Helix's info box (the keys a pending prefix offers), with its layout.
@@ -180,6 +182,10 @@ impl Frame {
                     _ => None,
                 })
                 .collect(),
+            prompt: host_views.iter().rev().find_map(|view| match view {
+                HostView::Prompt(prompt) => Some(prompt.clone()),
+                _ => None,
+            }),
             info: frame
                 .editor
                 .config()

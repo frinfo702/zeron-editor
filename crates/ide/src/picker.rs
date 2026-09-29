@@ -19,7 +19,7 @@ use helix_view::graphics::{Modifier, Rect};
 use zeron_ui::theme::Theme;
 
 use crate::{
-    host::{InfoView, MenuView, PickerView},
+    host::{InfoView, MenuView, PickerView, PromptView},
     paint::{Geometry, Layer},
     theme,
 };
@@ -494,6 +494,91 @@ pub(crate) fn paint_menu(
 }
 
 // ---------------------------------------------------------------------------
+// Command line completions
+// ---------------------------------------------------------------------------
+
+/// Grid position (col, row) of item `ix`: items fill columns top to bottom.
+fn prompt_slot(view: &PromptView, ix: usize) -> (u16, u16) {
+    let rows = view.area.height.max(1) as usize;
+    ((ix / rows) as u16, (ix % rows) as u16)
+}
+
+/// Which completion item `cell` is on.
+pub fn prompt_hit(view: &PromptView, (col, row): (u16, u16)) -> Option<Option<usize>> {
+    let area = view.area;
+    let inside =
+        col >= area.x && col < area.x + area.width && row >= area.y && row < area.y + area.height;
+    inside.then(|| {
+        let grid_col = ((col - area.x) / (view.col_width + 1).max(1)) as usize;
+        let ix = grid_col * area.height as usize + (row - area.y) as usize;
+        (ix < view.items.len()).then_some(ix)
+    })
+}
+
+/// Keys that move the command line's selection to item `index`: Tab cycles
+/// forward, Shift+Tab back; nothing selected starts before the first.
+pub fn prompt_keys_to_select(view: &PromptView, index: usize) -> Vec<&'static str> {
+    match view.selected {
+        Some(selected) if index >= selected => vec!["tab"; index - selected],
+        Some(selected) => vec!["S-tab"; selected - index],
+        None => vec!["tab"; index + 1],
+    }
+}
+
+/// Paint the command line's completions: the same column grid Helix lays
+/// out, in the code font, with a rounded selection. `lift` is how far the
+/// card was raised while the prompt is open.
+pub(crate) fn paint_prompt(
+    view: &PromptView,
+    g: &Geometry,
+    theme: &Theme,
+    window: &Window,
+    lift: Pixels,
+    layer: &mut Layer,
+) {
+    let code = Painter {
+        g,
+        theme,
+        window,
+        font: crate::paint::grid_font(theme),
+    };
+    let area = view.area;
+    for (ix, (text, style)) in view.items.iter().enumerate() {
+        let (grid_col, grid_row) = prompt_slot(view, ix);
+        let col = area.x + grid_col * (view.col_width + 1);
+        let row = area.y + grid_row;
+        let cell = g.helix_cell(col as usize, row as usize);
+        let y = cell.origin.y - lift;
+        let width = g.cell_w * view.col_width.max(1) as f32;
+        let x = cell.origin.x + px(8.0);
+        if view.selected == Some(ix) {
+            layer.quads.push(quad(
+                Bounds::new(
+                    point(cell.origin.x + px(3.0), y + px(1.0)),
+                    size(width - px(2.0), g.line_h - px(2.0)),
+                ),
+                Corners::all(px(Theme::CONTROL_RADIUS)),
+                theme.element_active,
+                px(0.0),
+                theme.element_active,
+                gpui::BorderStyle::Solid,
+            ));
+        }
+        let color = style
+            .fg
+            .and_then(|fg| theme::resolve(fg, theme))
+            .filter(|_| view.selected != Some(ix))
+            .unwrap_or(if view.selected == Some(ix) {
+                theme.text
+            } else {
+                theme.text.opacity(0.9)
+            });
+        let run = code.run(text.len(), color, FontWeight::NORMAL);
+        layer.lines.push((point(x, y), code.shape(text, &[run])));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Info box (pending keys)
 // ---------------------------------------------------------------------------
 
@@ -592,6 +677,24 @@ mod tests {
         assert_eq!(hit(&v, (12, 11)), Some(Hit::Pane));
         assert_eq!(hit(&v, (12, 6)), Some(Hit::Pane));
         assert_eq!(hit(&v, (5, 8)), None);
+    }
+
+    #[test]
+    fn prompt_grid_fills_columns_first() {
+        let view = PromptView {
+            area: Rect::new(0, 10, 60, 3),
+            cols: 3,
+            col_width: 19,
+            items: vec![("a".into(), Style::default()); 7],
+            selected: Some(1),
+        };
+        assert_eq!(prompt_slot(&view, 0), (0, 0));
+        assert_eq!(prompt_slot(&view, 4), (1, 1));
+        // Second column starts at x = 20; item 4 is its middle row.
+        assert_eq!(prompt_hit(&view, (21, 11)), Some(Some(4)));
+        assert_eq!(prompt_hit(&view, (45, 12)), Some(None));
+        assert_eq!(prompt_keys_to_select(&view, 4), vec!["tab"; 3]);
+        assert_eq!(prompt_keys_to_select(&view, 0), vec!["S-tab"]);
     }
 
     #[test]

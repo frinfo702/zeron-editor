@@ -54,9 +54,23 @@ pub struct DocView {
     pub markdown: String,
 }
 
+/// The command line's completion grid, as it last rendered.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PromptView {
+    /// The grid Helix drew (items fill it column by column).
+    pub area: Rect,
+    pub cols: u16,
+    pub col_width: u16,
+    /// The items on screen, in grid order, with their style.
+    pub items: Vec<HostSpan>,
+    /// Which of `items` is selected.
+    pub selected: Option<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostView {
     Picker(PickerView),
     Menu(MenuView),
     Doc(DocView),
+    Prompt(PromptView),
 }

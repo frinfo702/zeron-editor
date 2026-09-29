@@ -10,7 +10,7 @@
 //! it takes every key except the ⌘ chords it does not claim
 //! ([`keymap::claims_platform_key`]), which keep their Zeron meaning.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use futures::{StreamExt as _, channel::mpsc};
 use gpui::{
@@ -87,6 +87,8 @@ pub struct HelixEditor {
     geometry: Option<Geometry>,
     /// Window position of the grid element, for overlays placed over cells.
     grid_origin: Point<Pixels>,
+    /// Parsed and highlighted docs popups, by Markdown source.
+    doc_cache: std::cell::RefCell<std::collections::HashMap<String, Rc<ParsedDoc>>>,
     /// Grid size last sent to Helix.
     sent_grid: Option<(u16, u16)>,
     drag_button: Option<HelixButton>,
@@ -225,6 +227,7 @@ impl HelixEditor {
             config_error,
             geometry: None,
             grid_origin: Point::default(),
+            doc_cache: Default::default(),
             sent_grid: None,
             drag_button: None,
             scroll_carry: 0.0,
@@ -431,6 +434,17 @@ impl HelixEditor {
             }
             return;
         }
+        // A command line completion: select it (Enter still runs).
+        if let Some(view) = self.frame.as_ref().and_then(|frame| frame.prompt.clone())
+            && let Some((col, row)) = self.cell_at(event.position)
+            // The grid is drawn one row up while the prompt is open.
+            && let Some(hit) = crate::picker::prompt_hit(&view, (col, row + 1))
+        {
+            if let (Some(index), MouseButton::Left) = (hit, event.button) {
+                self.send_keys(crate::picker::prompt_keys_to_select(&view, index));
+            }
+            return;
+        }
         // Likewise a completion (or other) menu row.
         if let Some((menu, row)) = self.menu_hit(event.position) {
             if let (Some(index), MouseButton::Left) = (row, event.button) {
@@ -502,6 +516,44 @@ impl HelixEditor {
             self.send_mouse(kind, event.position, &event.modifiers);
         }
     }
+}
+
+/// A docs popup's Markdown, parsed, with its code blocks highlighted.
+struct ParsedDoc {
+    tree: zeron_markdown::BlockTree,
+    /// Per top-level block: the highlight of a code block.
+    highlights: Vec<Option<Arc<zeron_syntax::HighlightedDocument>>>,
+}
+
+fn parsed_doc(
+    cache: &std::cell::RefCell<std::collections::HashMap<String, Rc<ParsedDoc>>>,
+    markdown: &str,
+) -> Rc<ParsedDoc> {
+    if let Some(parsed) = cache.borrow().get(markdown) {
+        return parsed.clone();
+    }
+    let tree = zeron_markdown::parse_full(&hard_breaks(markdown));
+    let highlights = tree
+        .blocks
+        .iter()
+        .map(|top| match &top.block {
+            zeron_markdown::Block::CodeBlock { language, code } => {
+                zeron_syntax::highlight(zeron_syntax::HighlightRequest {
+                    source: code,
+                    path: None,
+                    fence_tag: language.as_deref(),
+                })
+                .ok()
+                .map(Arc::new)
+            }
+            _ => None,
+        })
+        .collect();
+    let parsed = Rc::new(ParsedDoc { tree, highlights });
+    cache
+        .borrow_mut()
+        .insert(markdown.to_string(), parsed.clone());
+    parsed
 }
 
 /// Helix shows every newline in its docs popups as a line break (paths,
@@ -760,6 +812,10 @@ impl HelixEditor {
         let (Some(frame), Some(g)) = (self.frame.as_ref(), self.geometry) else {
             return Vec::new();
         };
+        // Keep only the docs still on screen.
+        self.doc_cache
+            .borrow_mut()
+            .retain(|markdown, _| frame.docs.iter().any(|doc| &doc.markdown == markdown));
         frame
             .docs
             .iter()
@@ -771,14 +827,24 @@ impl HelixEditor {
                     (a.x + a.width).saturating_sub(1) as usize,
                     (a.y + a.height).saturating_sub(1) as usize,
                 );
-                let origin = first.origin - self.grid_origin;
+                let mut origin = first.origin - self.grid_origin;
+                // While the prompt holds the statusline row, its help and
+                // completions sit one row higher (see paint.rs).
+                if g.prompt {
+                    origin.y -= g.line_h;
+                }
                 let size = last.origin + point(g.cell_w, g.line_h) - first.origin;
-                let tree = zeron_markdown::parse_full(&hard_breaks(&doc.markdown));
+                let parsed = parsed_doc(&self.doc_cache, &doc.markdown);
                 let opts = zeron_ui::markdown::render::RenderOptions::settled(
                     format!("helix-doc-{ix}").into(),
                 );
-                let body =
-                    zeron_ui::markdown::render::render_tree(&tree, &opts, theme, window, &|_| None);
+                let body = zeron_ui::markdown::render::render_tree(
+                    &parsed.tree,
+                    &opts,
+                    theme,
+                    window,
+                    &|block| parsed.highlights.get(block).cloned().flatten(),
+                );
                 let fill = if theme.is_frost() {
                     theme.glass_overlay()
                 } else {

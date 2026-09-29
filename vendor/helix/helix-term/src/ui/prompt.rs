@@ -47,6 +47,8 @@ pub struct Prompt {
     pub doc_fn: DocFn,
     next_char_handler: Option<PromptCharHandler>,
     language: Option<(&'static str, Arc<ArcSwap<syntax::Loader>>)>,
+    /// zeron: the completion grid and help as last rendered, for a host.
+    host_views: Vec<crate::ui::host_view::HostView>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -103,6 +105,7 @@ impl Prompt {
             doc_fn: Box::new(|_| None),
             next_char_handler: None,
             language: None,
+            host_views: Vec::new(),
         }
     }
 
@@ -432,6 +435,8 @@ impl Prompt {
             area.width,
             height,
         );
+        // zeron: rebuilt below as this render lays things out.
+        self.host_views.clear();
 
         if completion_area.height > 0 && !self.completion.is_empty() {
             let area = completion_area;
@@ -445,6 +450,28 @@ impl Prompt {
                 .unwrap_or_default();
 
             surface.clear_with(area, background);
+
+            // zeron: the grid on screen, for a host.
+            self.host_views.push(crate::ui::host_view::HostView::Prompt(
+                crate::ui::host_view::PromptView {
+                    area,
+                    cols,
+                    col_width,
+                    items: self
+                        .completion
+                        .iter()
+                        .skip(offset)
+                        .take(items)
+                        .map(|(_, completion)| {
+                            (completion.content.to_string(), completion.style)
+                        })
+                        .collect(),
+                    selected: self
+                        .selection
+                        .and_then(|selection| selection.checked_sub(offset))
+                        .filter(|&ix| ix < items),
+                },
+            ));
 
             let mut row = 0;
             let mut col = 0;
@@ -491,6 +518,14 @@ impl Prompt {
                 completion_area.y.saturating_sub(height + padding * 2),
                 max_width,
                 height + padding * 2,
+            ));
+
+            // zeron: the help box, as a docs popup for a host.
+            self.host_views.push(crate::ui::host_view::HostView::Doc(
+                crate::ui::host_view::DocView {
+                    area,
+                    markdown: doc.to_string(),
+                },
             ));
 
             let background = theme.get("ui.help");
@@ -759,6 +794,12 @@ impl Component for Prompt {
 
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         self.render_prompt(area, surface, cx)
+    }
+
+    // zeron: see ui/host_view.rs. Only a prompt that is its own layer (the
+    // command line) reports; a picker's embedded prompt is not a layer.
+    fn host_views(&self) -> Vec<crate::ui::host_view::HostView> {
+        self.host_views.clone()
     }
 
     fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {

@@ -32,6 +32,7 @@ anyhow.workspace = true
 gpui.workspace = true
 zeron-ui.workspace = true
 zeron-markdown.workspace = true
+zeron-syntax.workspace = true
 toml = "0.8"
 serde.workspace = true
 tokio.workspace = true
