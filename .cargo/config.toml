@@ -1,0 +1,6 @@
+[env]
+# Helix's tree-house-bindings compiles its own copy of the tree-sitter C
+# runtime (v0.26.9), which collides symbol-for-symbol with the one the
+# `tree-sitter` crate links for zeron-syntax (v0.26.11, same ABI). Skip
+# tree-house's copy; crates/ide links the `tree-sitter` crate to provide it.
+DISABLED_TS_BUILD = "1"

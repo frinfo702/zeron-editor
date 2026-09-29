@@ -1,0 +1,23 @@
+[package]
+name = "zeron-ide"
+version.workspace = true
+edition.workspace = true
+# Links MPL-2.0 Helix crates from vendor/helix; this crate's own sources are MIT.
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+helix-core = { path = "../../vendor/helix/helix-core" }
+helix-view = { path = "../../vendor/helix/helix-view" }
+helix-term = { path = "../../vendor/helix/helix-term", default-features = false, features = ["git"] }
+helix-loader = { path = "../../vendor/helix/helix-loader" }
+helix-lsp = { path = "../../vendor/helix/helix-lsp" }
+helix-event = { path = "../../vendor/helix/helix-event" }
+tui = { path = "../../vendor/helix/helix-tui", package = "helix-tui", default-features = false }
+anyhow.workspace = true
+# Provides the tree-sitter C runtime for Helix (see .cargo/config.toml).
+# Pinned to zeron-syntax's version so the whole app links one runtime.
+tree-sitter = "=0.26.11"
+
+[dev-dependencies]
+zeron-syntax.workspace = true
