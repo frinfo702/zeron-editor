@@ -31,6 +31,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tui::buffer::Buffer;
 
+pub use helix_term::ui::host_view::PickerView;
 pub use helix_view::input::Event;
 
 /// An owned snapshot of one Helix render, safe to hand across threads.
@@ -49,6 +50,8 @@ pub struct Frame {
     /// grapheme: Helix highlights it as part of the range, a non-modal
     /// editor does not (see `standard::caret_selection`).
     pub selection_tails: Vec<(u16, u16)>,
+    /// The front-most picker, drawn natively by the view.
+    pub picker: Option<PickerView>,
 }
 
 fn selection_tails(editor: &helix_view::Editor) -> Vec<(u16, u16)> {
@@ -116,6 +119,14 @@ impl Frame {
             accepts_text: accepts_text(frame),
             buffers: buffers(frame.editor),
             selection_tails: selection_tails(frame.editor),
+            picker: frame
+                .compositor
+                .host_views()
+                .into_iter()
+                .rev()
+                .find_map(|view| match view {
+                    helix_term::ui::host_view::HostView::Picker(picker) => Some(picker),
+                }),
         }
     }
 }

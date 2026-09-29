@@ -275,6 +275,8 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     /// An event handler for syntax highlighting the currently previewed file.
     preview_highlight_handler: Sender<Arc<Path>>,
     dynamic_query_handler: Option<Sender<DynamicQueryChange>>,
+    /// zeron: the last render, for a host drawing the picker natively.
+    host_view: crate::ui::host_view::PickerView,
 }
 
 impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
@@ -396,6 +398,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             file_fn: None,
             preview_highlight_handler: PreviewHighlightHandler::<T, D>::default().spawn(),
             dynamic_query_handler: None,
+            host_view: Default::default(),
         }
     }
 
@@ -742,6 +745,8 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             .saturating_add(rows)
             .min(snapshot.matched_item_count());
         let mut indices = Vec::new();
+        // zeron: the same rows, as plain spans, for a host.
+        let mut host_rows: Vec<Vec<Vec<crate::ui::host_view::HostSpan>>> = Vec::new();
         let mut matcher = MATCHER.lock();
         matcher.config = Config::DEFAULT;
         if self.file_fn.is_some() {
@@ -751,8 +756,9 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         let options = snapshot.matched_items(offset..end).map(|item| {
             let mut widths = self.widths.iter_mut();
             let mut matcher_index = 0;
+            let mut host_cells = Vec::new();
 
-            Row::new(self.columns.iter().map(|column| {
+            let row = Row::new(self.columns.iter().map(|column| {
                 if column.hidden {
                     return Cell::default();
                 }
@@ -821,8 +827,22 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                     *max_width = width as u16;
                 }
 
+                host_cells.push(
+                    cell.content
+                        .lines
+                        .first()
+                        .map(|line| {
+                            line.0
+                                .iter()
+                                .map(|span| (span.content.to_string(), span.style))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                );
                 cell
-            }))
+            }));
+            host_rows.push(host_cells);
+            row
         });
 
         let mut table = Table::new(options)
@@ -868,6 +888,25 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             },
             self.truncate_start,
         );
+
+        // zeron: publish this render for a host.
+        self.host_view.query = self.prompt.line().clone();
+        self.host_view.query_cursor = self.prompt.position();
+        self.host_view.matched = snapshot.matched_item_count();
+        self.host_view.total = snapshot.item_count();
+        self.host_view.running = status.running || self.matcher.active_injectors() > 0;
+        self.host_view.headers = if self.columns.len() > 1 {
+            self.columns
+                .iter()
+                .filter(|column| !column.hidden)
+                .map(|column| column.name.to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.host_view.rows = host_rows;
+        self.host_view.selected = cursor as usize;
+        self.host_view.files = self.file_fn.is_some();
     }
 
     fn render_preview(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
@@ -1018,11 +1057,19 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
 
         let picker_area = area.with_width(picker_width);
         self.render_picker(picker_area, surface, cx);
+        // zeron: record where the panes went.
+        self.host_view.area = picker_area;
+        self.host_view.preview_area = render_preview.then(|| area.clip_left(picker_width));
 
         if render_preview {
             let preview_area = area.clip_left(picker_width);
             self.render_preview(preview_area, surface, cx);
         }
+    }
+
+    // zeron: see ui/host_view.rs.
+    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
+        Some(crate::ui::host_view::HostView::Picker(self.host_view.clone()))
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {

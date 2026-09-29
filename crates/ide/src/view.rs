@@ -387,6 +387,24 @@ impl HelixEditor {
         }));
     }
 
+    /// The native picker under `position`, if any.
+    fn picker_hit(
+        &self,
+        position: Point<Pixels>,
+    ) -> Option<(crate::host::PickerView, crate::picker::Hit)> {
+        let view = self.frame.as_ref()?.picker.clone()?;
+        let cell = self.cell_at(position)?;
+        crate::picker::hit(&view, cell).map(|hit| (view, hit))
+    }
+
+    fn send_keys<'a>(&self, keys: impl IntoIterator<Item = &'a str>) {
+        for key in keys {
+            if let Ok(key) = key.parse() {
+                self.send(Event::Key(key));
+            }
+        }
+    }
+
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -394,6 +412,15 @@ impl HelixEditor {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        // A click on a native picker row picks it; elsewhere in the list pane
+        // it does nothing (Helix would read it as a click on its cells).
+        if let Some((view, hit)) = self.picker_hit(event.position) {
+            if let (crate::picker::Hit::Row(index), MouseButton::Left) = (hit, event.button) {
+                self.send_keys(crate::picker::keys_to_select(&view, index));
+                self.send_keys(["ret"]);
+            }
+            return;
+        }
         let Some(button) = helix_button(event.button) else {
             return;
         };
@@ -429,6 +456,21 @@ impl HelixEditor {
             ScrollDelta::Lines(delta) => delta.y,
             ScrollDelta::Pixels(delta) => delta.y / g.line_h,
         };
+        // Over a native picker the wheel moves its selection.
+        if self.picker_hit(event.position).is_some() {
+            self.scroll_carry += lines;
+            while self.scroll_carry.abs() >= 1.0 {
+                let key = if self.scroll_carry > 0.0 {
+                    self.scroll_carry -= 1.0;
+                    "up"
+                } else {
+                    self.scroll_carry += 1.0;
+                    "down"
+                };
+                self.send_keys([key]);
+            }
+            return;
+        }
         // Helix scrolls `scroll-lines` (1 under Zeron's defaults) per event.
         self.scroll_carry += lines;
         while self.scroll_carry.abs() >= 1.0 {

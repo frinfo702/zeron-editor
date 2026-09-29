@@ -43,3 +43,8 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
   defines it (else `ui.background`), so the host can find and restyle them.
 - `helix-view/src/document.rs`: `last_saved_time()` getter, so the host can
   tell a file changed on disk (an agent's edit) from Helix's own save.
+- `helix-term/src/ui/host_view.rs` (new) and `Component::host_view`: a
+  component reports the state a host needs to draw it natively. `Picker`
+  records it while rendering (query, counts, visible rows with match
+  highlights, pane areas); `Overlay` forwards it; `Compositor::host_views`
+  collects them.

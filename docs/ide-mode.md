@@ -46,6 +46,12 @@ that runs on another device shows an explanation instead of an editor.
   clear their area with overlay tokens. The painter turns each such region
   into a card in its own layer: shadow, blur on frosted surfaces, rounded
   fill, hairline border. Box-drawing characters become 1px lines.
+- **Native pickers.** Helix records each picker render (`ui/host_view.rs`
+  in `helix-term`: query, counts, the rows on screen with match highlights,
+  pane areas). The painter leaves the list pane blank and `picker.rs` draws
+  it with the UI font: a search field, `name  dir/` file rows, measured
+  columns for tables, a rounded selection. Keys still go to Helix; clicks
+  and the wheel become arrow keys and Enter.
 - **Tabs and the command line.** Open buffers show as a Zeron tab strip
   above the grid. Helix's message / command line row is hidden and floats
   as a card above the statusline while in use.
@@ -124,11 +130,10 @@ borrows compiled grammars from an existing Helix install.
 
 ## Not done yet
 
-- **Helix's floating layers are restyled, not rebuilt.** Pickers, popups,
-  menus and the info box render as Zeron cards (`paint.rs`), and the
-  statusline as a strip with mode pills. Their contents are still Helix's
-  cell layout (monospace rows, `>` markers). Fully native components would
-  need each layer's state exposed from `helix-term`.
+- **Popups, menus and the command line are restyled, not rebuilt.** They
+  render as Zeron cards with Helix's cell layout inside. Pickers are native
+  (below); the same `host_view` hook in `helix-term` is how the rest would
+  follow. The picker preview pane is still Helix's grid.
 - **Off macOS, most Ctrl chords go to the editor** while it has focus, so
   Zeron's other `Mod` shortcuts (Ctrl there) are shadowed. The Agent/IDE
   switch and the sidebar, terminal, files and changes toggles always pass

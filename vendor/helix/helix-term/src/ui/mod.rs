@@ -4,6 +4,8 @@ pub(crate) mod editor;
 mod info;
 pub mod lsp;
 mod markdown;
+// zeron: see host_view.rs.
+pub mod host_view;
 pub mod menu;
 pub mod overlay;
 pub mod picker;

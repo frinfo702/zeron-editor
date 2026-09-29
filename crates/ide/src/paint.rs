@@ -102,6 +102,8 @@ pub(crate) struct Layer {
 pub(crate) struct Card {
     pub bounds: Bounds<Pixels>,
     pub layer: Layer,
+    /// Natively drawn panes inside the card, each clipped to its bounds.
+    pub panes: Vec<(Bounds<Pixels>, Layer)>,
 }
 
 pub(crate) struct GridPaint {
@@ -167,6 +169,14 @@ impl GridPaint {
                 ));
                 window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
                     paint_layer_contents(&mut card.layer, line_h, window, cx);
+                    for (clip, pane) in &mut card.panes {
+                        window.with_content_mask(
+                            Some(gpui::ContentMask { bounds: *clip }),
+                            |window| {
+                                paint_layer_contents(pane, line_h, window, cx);
+                            },
+                        );
+                    }
                 });
             });
         }
@@ -489,6 +499,11 @@ pub(crate) fn paint_frame(
     let cols = width.min(g.cols as usize);
     let rows = (buffer.area.height as usize).min(g.rows as usize);
     let cell_at = |col: usize, row: usize| &buffer.content[row * width + col];
+    let native_picker = frame.picker.as_ref().map(crate::picker::inner);
+    let contains = |rect: helix_view::graphics::Rect, col: usize, row: usize| {
+        (rect.x as usize..(rect.x + rect.width) as usize).contains(&col)
+            && (rect.y as usize..(rect.y + rect.height) as usize).contains(&row)
+    };
     // Helix's message / command line (the row below the statusline) only
     // shows while it has something to say or holds the prompt cursor.
     let message_row = (buffer.area.height as usize > rows)
@@ -539,6 +554,7 @@ pub(crate) fn paint_frame(
         .map(|(ix, (rect, framed))| Card {
             bounds: lifted(card_bounds(rect, *framed, g), Some(ix)),
             layer: Layer::default(),
+            panes: Vec::new(),
         })
         .collect();
     let message_card = message_row.map(|row| {
@@ -549,6 +565,7 @@ pub(crate) fn paint_frame(
                 g.cell(cols.saturating_sub(1), at).origin + point(g.cell_w, g.line_h),
             ),
             layer: Layer::default(),
+            panes: Vec::new(),
         });
         cards.len() - 1
     });
@@ -560,6 +577,11 @@ pub(crate) fn paint_frame(
         let paints: Vec<CellPaint> = (0..cols)
             .map(|col| {
                 let mut paint = resolve_cell(cell_at(col, row), theme);
+                // The picker's list pane is drawn natively (picker.rs).
+                if native_picker.is_some_and(|inner| contains(inner, col, row)) {
+                    paint.bg = None;
+                    paint.hidden = true;
+                }
                 if trim_selection_tails
                     && matches!(
                         paint.bg_token,
@@ -803,9 +825,28 @@ pub(crate) fn paint_frame(
         );
     }
 
+    if let Some(view) = &frame.picker {
+        let inner = crate::picker::inner(view);
+        if let Some(card) = card_of(inner.x as usize, inner.y as usize) {
+            let mut pane = Layer::default();
+            crate::picker::paint(view, g, theme, window, &mut pane);
+            let first = g.helix_cell(inner.x as usize, inner.y as usize);
+            let last = g.helix_cell(
+                (inner.x + inner.width).saturating_sub(1) as usize,
+                (inner.y + inner.height).saturating_sub(1) as usize,
+            );
+            let clip = Bounds::from_corners(first.origin, last.origin + point(g.cell_w, g.line_h));
+            cards[card].panes.push((clip, pane));
+        }
+    }
+
     // Helix draws block cursors into the grid itself; a bar or underline
-    // cursor is the "terminal" cursor, painted here.
-    let cursor = frame.cursor.and_then(|(col, row)| {
+    // cursor is the "terminal" cursor, painted here. Inside a native picker
+    // the list draws its own caret.
+    let cursor = frame.cursor.filter(|&(col, row)| {
+        !native_picker.is_some_and(|inner| contains(inner, col as usize, row as usize))
+    });
+    let cursor = cursor.and_then(|(col, row)| {
         let cell = g.helix_cell(col as usize, row as usize);
         let color = if focused {
             theme.caret

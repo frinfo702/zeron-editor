@@ -73,4 +73,9 @@ impl<T: Component + 'static> Component for Overlay<T> {
     fn id(&self) -> Option<&'static str> {
         self.content.id()
     }
+
+    // zeron: an overlaid picker still reports itself to a host.
+    fn host_view(&self) -> Option<crate::ui::host_view::HostView> {
+        self.content.host_view()
+    }
 }
