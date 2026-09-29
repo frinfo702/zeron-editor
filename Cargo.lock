@@ -13829,12 +13829,15 @@ dependencies = [
  "helix-term",
  "helix-tui",
  "helix-view",
+ "serde",
  "tempfile",
  "tokio",
  "tokio-stream",
+ "toml 0.8.23",
  "tracing",
  "tree-sitter",
  "zeron-syntax",
+ "zeron-ui",
 ]
 
 [[package]]

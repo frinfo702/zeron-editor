@@ -17,6 +17,9 @@ helix-stdx = { path = "../../vendor/helix/helix-stdx" }
 tui = { path = "../../vendor/helix/helix-tui", package = "helix-tui", default-features = false }
 anyhow.workspace = true
 gpui.workspace = true
+zeron-ui.workspace = true
+toml = "0.8"
+serde.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tracing.workspace = true
