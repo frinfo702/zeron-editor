@@ -802,12 +802,20 @@ impl Element for HelixGrid {
             bounds.left() + px(PADDING),
             bounds.bottom() - line_h * rows as f32,
         );
+        // The prompt holds the cursor on Helix's message line (row `rows`).
+        let prompt = self
+            .editor
+            .read(cx)
+            .frame
+            .as_ref()
+            .is_some_and(|frame| frame.cursor.is_some_and(|(_, row)| row >= rows));
         let geometry = Geometry {
             origin,
             cell_w,
             line_h,
             cols,
             rows,
+            prompt,
         };
         let (frame, focused, focus, marked, modeless) = self.editor.update(cx, |editor, _| {
             editor.on_geometry(geometry);

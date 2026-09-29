@@ -41,17 +41,25 @@ pub(crate) struct Geometry {
     pub line_h: Pixels,
     pub cols: u16,
     pub rows: u16,
+    /// Helix's prompt is open on its message line. The line then paints over
+    /// the statusline row, because Helix stacks the prompt's completions and
+    /// help on the rows directly above its own line.
+    pub prompt: bool,
 }
 
 impl Geometry {
     /// Where a Helix row paints. Helix renders one row more than is visible:
-    /// its last row is the message / command line, which floats as a card
-    /// just above the statusline (see [`paint_frame`]).
+    /// its last row is the message / command line, shown as a card (see
+    /// [`paint_frame`]). A message floats just above the statusline; an open
+    /// prompt takes the statusline's row so its completions stay above it.
     pub fn display_row(&self, row: usize) -> usize {
-        if row >= self.rows as usize {
-            (self.rows as usize).saturating_sub(2)
-        } else {
+        let rows = self.rows as usize;
+        if row < rows {
             row
+        } else if self.prompt {
+            rows.saturating_sub(1)
+        } else {
+            rows.saturating_sub(2)
         }
     }
 
@@ -395,25 +403,62 @@ fn resolve_cell(cell: &tui::buffer::Cell, theme: &Theme) -> CellPaint {
     }
 }
 
-/// Pixel bounds of a card. A bordered card's edge runs through the centres
-/// of its border cells, where Helix's frame line would have been.
-fn card_bounds(rect: &CellRect, bordered: bool, g: &Geometry) -> Bounds<Pixels> {
+/// Which edges of a card Helix drew a frame line along. One card can merge
+/// a framed layer with an unframed one (a prompt's help box sits on its
+/// completion list), so each edge is judged by the corners at its ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct Framed {
+    pub top: bool,
+    pub bottom: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+impl Framed {
+    fn of(rect: &CellRect, arms_at: impl Fn(usize, usize) -> Option<Arms>) -> Self {
+        let corner = |col, row, horizontal: fn(&Arms) -> bool, vertical: fn(&Arms) -> bool| {
+            arms_at(col, row).is_some_and(|arms| horizontal(&arms) && vertical(&arms))
+        };
+        let tl = corner(rect.col0, rect.row0, |a| a.right, |a| a.down);
+        let tr = corner(rect.col1, rect.row0, |a| a.left, |a| a.down);
+        let bl = corner(rect.col0, rect.row1, |a| a.right, |a| a.up);
+        let br = corner(rect.col1, rect.row1, |a| a.left, |a| a.up);
+        Self {
+            top: tl && tr,
+            bottom: bl && br,
+            left: tl && bl,
+            right: tr && br,
+        }
+    }
+}
+
+/// Pixel bounds of a card. A framed edge runs through the centres of its
+/// border cells, where Helix's frame line would have been; an unframed edge
+/// is the cell boundary.
+fn card_bounds(rect: &CellRect, framed: Framed, g: &Geometry) -> Bounds<Pixels> {
     let first = g.cell(rect.col0, rect.row0);
     let last = g.cell(rect.col1, rect.row1);
-    if bordered {
-        Bounds::from_corners(
-            point(
-                first.origin.x + g.cell_w / 2.0,
-                first.origin.y + g.line_h / 2.0,
-            ),
-            point(
-                last.origin.x + g.cell_w / 2.0 + px(1.0),
-                last.origin.y + g.line_h / 2.0 + px(1.0),
-            ),
-        )
-    } else {
-        Bounds::from_corners(first.origin, last.origin + point(g.cell_w, g.line_h))
-    }
+    let (half_w, half_h) = (g.cell_w / 2.0, g.line_h / 2.0);
+    Bounds::from_corners(
+        point(
+            first.origin.x + if framed.left { half_w } else { px(0.0) },
+            first.origin.y + if framed.top { half_h } else { px(0.0) },
+        ),
+        point(
+            last.origin.x
+                + if framed.right {
+                    half_w + px(1.0)
+                } else {
+                    g.cell_w
+                },
+            last.origin.y
+                + if framed.bottom {
+                    half_h + px(1.0)
+                } else {
+                    g.line_h
+                },
+        ),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -446,22 +491,43 @@ pub(crate) fn paint_frame(
     let rects = find_cards(cols, rows, |col, row| {
         Token::of(cell_at(col, row).bg).is_some_and(Token::is_overlay)
     });
-    let bordered: Vec<bool> = rects
+    let framed: Vec<Framed> = rects
         .iter()
-        .map(|rect| {
-            box_arms(&cell_at(rect.col0, rect.row0).symbol)
-                .is_some_and(|arms| arms.right && arms.down && !arms.left && !arms.up)
-        })
+        .map(|rect| Framed::of(rect, |col, row| box_arms(&cell_at(col, row).symbol)))
         .collect();
     // Later layers draw over earlier ones; the topmost card owns a cell.
     let card_of = |col: usize, row: usize| rects.iter().rposition(|rect| rect.contains(col, row));
 
+    // While the prompt is open it takes the statusline's row, which is where
+    // Helix put the bottom of the completions / help stacked above its line.
+    // Cards resting on that row lift one row so nothing hides under it.
+    let lifts: Vec<Pixels> = rects
+        .iter()
+        .map(|rect| {
+            if g.prompt && rect.row1 + 1 == rows {
+                g.line_h
+            } else {
+                px(0.0)
+            }
+        })
+        .collect();
+    let lift_of = |owner: Option<usize>| {
+        owner
+            .and_then(|card| lifts.get(card).copied())
+            .unwrap_or(px(0.0))
+    };
+    let lifted = |mut cell: Bounds<Pixels>, owner: Option<usize>| {
+        cell.origin.y -= lift_of(owner);
+        cell
+    };
+
     let mut base = Layer::default();
     let mut cards: Vec<Card> = rects
         .iter()
-        .zip(&bordered)
-        .map(|(rect, bordered)| Card {
-            bounds: card_bounds(rect, *bordered, g),
+        .zip(&framed)
+        .enumerate()
+        .map(|(ix, (rect, framed))| Card {
+            bounds: lifted(card_bounds(rect, *framed, g), Some(ix)),
             layer: Layer::default(),
         })
         .collect();
@@ -539,7 +605,7 @@ pub(crate) fn paint_frame(
                 (current, next) => {
                     if let Some((start, color, owner, badge)) = current {
                         let cells = Bounds::new(
-                            point(x0 + g.cell_w * start as f32, y),
+                            point(x0 + g.cell_w * start as f32, y - lift_of(owner)),
                             size(g.cell_w * (col - start) as f32, g.line_h),
                         );
                         let quad = if badge {
@@ -602,7 +668,10 @@ pub(crate) fn paint_frame(
                 None,
             );
             runs.clear();
-            let entry = (point(x0 + g.cell_w * seg_col as f32, y), shaped);
+            let entry = (
+                point(x0 + g.cell_w * seg_col as f32, y - lift_of(owner)),
+                shaped,
+            );
             match owner {
                 Some(card) => cards[card].layer.lines.push(entry),
                 None => base.lines.push(entry),
@@ -620,13 +689,13 @@ pub(crate) fn paint_frame(
             if let Some(mut arms) = arms {
                 let rect = owner.map(|card| (card, rects[card]));
                 if let Some((card, rect)) = rect
-                    && bordered[card]
                     && rect.on_edge(col, row)
                 {
-                    // The card edge replaces the frame: drop the frame's
-                    // own arms and keep only a junction's inward arm.
-                    let (on_l, on_r) = (col == rect.col0, col == rect.col1);
-                    let (on_t, on_b) = (row == rect.row0, row == rect.row1);
+                    // A framed card edge replaces Helix's frame line: drop
+                    // the frame's own arms and keep a junction's inward arm.
+                    let f = framed[card];
+                    let (on_l, on_r) = (f.left && col == rect.col0, f.right && col == rect.col1);
+                    let (on_t, on_b) = (f.top && row == rect.row0, f.bottom && row == rect.row1);
                     if on_l || on_r {
                         arms.up = false;
                         arms.down = false;
@@ -649,7 +718,7 @@ pub(crate) fn paint_frame(
                 match owner {
                     Some(card) => push_rules(
                         &mut cards[card].layer.rules,
-                        g.helix_cell(col, row),
+                        lifted(g.helix_cell(col, row), Some(card)),
                         arms,
                         color,
                     ),
@@ -842,6 +911,41 @@ mod tests {
     fn single_cells_are_not_cards() {
         let (cols, rows, cells) = grid(&["....", ".#..", "...."]);
         assert!(find_cards(cols, rows, |c, r| cells[r * cols + c]).is_empty());
+    }
+
+    #[test]
+    fn frames_are_judged_per_edge() {
+        // A help box (framed) resting on a completion list (unframed):
+        //   ┌──┐....
+        //   └──┘....
+        //   abcdefgh
+        let rows = ["┌──┐....", "└──┘....", "abcdefgh"];
+        let at = |col: usize, row: usize| {
+            let ch = rows[row].chars().nth(col).unwrap().to_string();
+            box_arms(&ch)
+        };
+        let merged = CellRect {
+            col0: 0,
+            row0: 0,
+            col1: 7,
+            row1: 2,
+        };
+        assert_eq!(Framed::of(&merged, at), Framed::default());
+        let help = CellRect {
+            col0: 0,
+            row0: 0,
+            col1: 3,
+            row1: 1,
+        };
+        assert_eq!(
+            Framed::of(&help, at),
+            Framed {
+                top: true,
+                bottom: true,
+                left: true,
+                right: true
+            }
+        );
     }
 
     #[test]
