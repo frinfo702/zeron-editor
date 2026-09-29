@@ -53,6 +53,45 @@ pub struct Frame {
     /// The front-most picker and menu, drawn natively by the view.
     pub picker: Option<PickerView>,
     pub menu: Option<MenuView>,
+    /// The pending-keys info box ("which key"), drawn natively.
+    pub info: Option<InfoView>,
+}
+
+/// Helix's info box (the keys a pending prefix offers), with its layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoView {
+    /// Where Helix draws it, frame included.
+    pub area: helix_view::graphics::Rect,
+    pub title: String,
+    /// `(keys, description)` per row.
+    pub rows: Vec<(String, String)>,
+}
+
+impl InfoView {
+    fn capture(info: &helix_view::info::Info, viewport: helix_view::graphics::Rect) -> Self {
+        // As ui/info.rs lays it out: bottom right, above the statusline.
+        let width = info.width + 4;
+        let height = info.height + 2;
+        let area = viewport.intersection(helix_view::graphics::Rect::new(
+            viewport.width.saturating_sub(width),
+            viewport.height.saturating_sub(height + 2),
+            width,
+            height,
+        ));
+        let rows = info
+            .text
+            .lines()
+            .map(|line| match line.split_once("  ") {
+                Some((keys, desc)) => (keys.trim().to_string(), desc.trim().to_string()),
+                None => (String::new(), line.trim().to_string()),
+            })
+            .collect();
+        Self {
+            area,
+            title: info.title.to_string(),
+            rows,
+        }
+    }
 }
 
 fn selection_tails(editor: &helix_view::Editor) -> Vec<(u16, u16)> {
@@ -130,6 +169,13 @@ impl Frame {
                 HostView::Menu(menu) => Some(menu.clone()),
                 _ => None,
             }),
+            info: frame
+                .editor
+                .config()
+                .auto_info
+                .then_some(())
+                .and(frame.editor.autoinfo.as_ref())
+                .map(|info| InfoView::capture(info, frame.buffer.area)),
         }
     }
 }
@@ -138,6 +184,28 @@ fn accepts_text(frame: &HelixFrame<'_>) -> bool {
     let top = frame.compositor.top_type_name().unwrap_or_default();
     // Picker embeds a Prompt, so both names cover filtering pickers too.
     top.contains("Prompt") || top.contains("Picker") || frame.editor.mode() == Mode::Insert
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn info_rows_split_keys_from_descriptions() {
+        let info = helix_view::info::Info::new("Space", &[("f", "File picker"), ("C-w", "Window")]);
+        let view = InfoView::capture(&info, helix_view::graphics::Rect::new(0, 0, 80, 25));
+        assert_eq!(view.title, "Space");
+        assert_eq!(
+            view.rows,
+            vec![
+                ("f".to_string(), "File picker".to_string()),
+                ("C-w".to_string(), "Window".to_string())
+            ]
+        );
+        // Bottom right, clear of the statusline and message rows.
+        assert_eq!(view.area.x + view.area.width, 80);
+        assert_eq!(view.area.y + view.area.height, 23);
+    }
 }
 
 #[derive(Default)]

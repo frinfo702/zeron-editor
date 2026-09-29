@@ -57,6 +57,10 @@ that runs on another device shows an explanation instead of an editor.
   layer). They paint as a card of their own: labels in the code font, kind /
   detail muted, a rounded selection and a thin scrollbar. Clicks select and
   accept a row.
+- **Native info box.** The pending-keys box ("which key") is read from
+  `editor.autoinfo` and laid out where Helix puts it: its title, then each
+  key as a small key cap beside its description. The message line's echo of
+  the pending prefix is hidden while it shows.
 - **Touching layers.** A region of overlay cells that is not a rectangle
   (completion menu beside its docs, a help box on a wider list) splits into
   rectangles, and a reported menu is always its own card.
@@ -138,8 +142,8 @@ borrows compiled grammars from an existing Helix install.
 
 ## Not done yet
 
-- **Hover / signature / completion docs, the info box and the command line
-  are restyled, not rebuilt.** They render as Zeron cards with Helix's cell
+- **Hover / signature / completion docs and the command line are
+  restyled, not rebuilt.** They render as Zeron cards with Helix's cell
   layout inside. Pickers and menus are native (below); the same
   `host_view` hook in `helix-term` is how the rest would follow. The picker
   preview pane is still Helix's grid.

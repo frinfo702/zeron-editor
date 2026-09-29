@@ -19,7 +19,7 @@ use helix_view::graphics::{Modifier, Rect};
 use zeron_ui::theme::Theme;
 
 use crate::{
-    host::{MenuView, PickerView},
+    host::{InfoView, MenuView, PickerView},
     paint::{Geometry, Layer},
     theme,
 };
@@ -490,6 +490,82 @@ pub(crate) fn paint_menu(
             theme.text_faint,
             gpui::BorderStyle::Solid,
         ));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Info box (pending keys)
+// ---------------------------------------------------------------------------
+
+/// Paint the "which key" box: its title, then each key as a small key cap
+/// in the code font beside its description.
+pub(crate) fn paint_info(
+    view: &InfoView,
+    g: &Geometry,
+    theme: &Theme,
+    window: &Window,
+    layer: &mut Layer,
+) {
+    let area = view.area;
+    if area.width < 3 || area.height < 2 {
+        return;
+    }
+    let ui = Painter {
+        g,
+        theme,
+        window,
+        font: gpui::font(theme.font_sans.clone()),
+    };
+    let code = Painter {
+        g,
+        theme,
+        window,
+        font: crate::paint::grid_font(theme),
+    };
+    let left = g.helix_cell(area.x as usize, area.y as usize).origin.x + px(PAD_X);
+    let row_y = |row: u16| g.helix_cell(0, row as usize).origin.y;
+
+    let title_run = ui.run(view.title.len(), theme.text_muted, FontWeight::SEMIBOLD);
+    layer.lines.push((
+        point(left, row_y(area.y)),
+        ui.shape(&view.title, &[title_run]),
+    ));
+
+    let caps: Vec<ShapedLine> = view
+        .rows
+        .iter()
+        .map(|(keys, _)| {
+            let run = code.run(keys.len(), theme.text, FontWeight::NORMAL);
+            code.shape(keys, &[run])
+        })
+        .collect();
+    let cap_width = caps
+        .iter()
+        .map(|cap| cap.width)
+        .fold(px(0.0), |a, b| a.max(b));
+    let desc_x = left + cap_width + px(8.0 + 12.0);
+    for (ix, ((_, desc), cap)) in view.rows.iter().zip(caps).enumerate() {
+        let row = area.y + 1 + ix as u16;
+        if row >= area.y + area.height {
+            break;
+        }
+        let y = row_y(row);
+        if cap.width > px(0.0) {
+            layer.quads.push(quad(
+                Bounds::new(
+                    point(left - px(4.0), y + px(3.0)),
+                    size(cap.width + px(8.0), g.line_h - px(6.0)),
+                ),
+                Corners::all(px(4.0)),
+                theme.element_active,
+                px(0.0),
+                theme.element_active,
+                gpui::BorderStyle::Solid,
+            ));
+        }
+        layer.lines.push((point(left, y), cap));
+        let run = ui.run(desc.len(), theme.text_muted, FontWeight::NORMAL);
+        layer.lines.push((point(desc_x, y), ui.shape(desc, &[run])));
     }
 }
 

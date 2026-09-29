@@ -579,6 +579,7 @@ pub(crate) fn paint_frame(
     let cell_at = |col: usize, row: usize| &buffer.content[row * width + col];
     let native_picker = frame.picker.as_ref().map(crate::picker::inner);
     let native_menu = frame.menu.as_ref().map(|menu| menu.area);
+    let native_info = frame.info.as_ref().map(|info| info.area);
     let contains = |rect: helix_view::graphics::Rect, col: usize, row: usize| {
         (rect.x as usize..(rect.x + rect.width) as usize).contains(&col)
             && (rect.y as usize..(rect.y + rect.height) as usize).contains(&row)
@@ -588,8 +589,12 @@ pub(crate) fn paint_frame(
     let message_row = (buffer.area.height as usize > rows)
         .then_some(rows)
         .filter(|&row| {
-            frame.cursor.is_some_and(|(_, r)| r as usize == row)
-                || (0..cols).any(|col| !cell_at(col, row).symbol.trim().is_empty())
+            let prompt = frame.cursor.is_some_and(|(_, r)| r as usize == row);
+            // While the info box lists a pending prefix's keys, the message
+            // line only echoes that prefix: leave it out.
+            prompt
+                || (frame.info.is_none()
+                    && (0..cols).any(|col| !cell_at(col, row).symbol.trim().is_empty()))
         });
 
     let is_overlay =
@@ -600,6 +605,7 @@ pub(crate) fn paint_frame(
         .menu
         .iter()
         .map(|menu| menu.area)
+        .chain(frame.info.iter().map(|info| info.area))
         .filter(|area| area.width > 0 && area.height > 0)
         .map(|area| CellRect {
             col0: area.x as usize,
@@ -612,10 +618,20 @@ pub(crate) fn paint_frame(
     let mut rects = find_cards(cols, rows, |col, row| {
         is_overlay(col, row) && !known.iter().any(|rect| rect.contains(col, row))
     });
+    let first_known = rects.len();
     rects.extend(known);
+    // Natively drawn cards sit on cell boundaries: their contents replace
+    // whatever frame Helix drew.
     let framed: Vec<Framed> = rects
         .iter()
-        .map(|rect| Framed::of(rect, |col, row| box_arms(&cell_at(col, row).symbol)))
+        .enumerate()
+        .map(|(ix, rect)| {
+            if ix >= first_known {
+                Framed::default()
+            } else {
+                Framed::of(rect, |col, row| box_arms(&cell_at(col, row).symbol))
+            }
+        })
         .collect();
     // Later layers draw over earlier ones; the topmost card owns a cell.
     let card_of = |col: usize, row: usize| rects.iter().rposition(|rect| rect.contains(col, row));
@@ -677,6 +693,7 @@ pub(crate) fn paint_frame(
                 // The picker's list pane is drawn natively (picker.rs).
                 if native_picker.is_some_and(|inner| contains(inner, col, row))
                     || native_menu.is_some_and(|area| contains(area, col, row))
+                    || native_info.is_some_and(|area| contains(area, col, row))
                 {
                     paint.bg = None;
                     paint.hidden = true;
@@ -935,6 +952,16 @@ pub(crate) fn paint_frame(
                 (inner.y + inner.height).saturating_sub(1) as usize,
             );
             let clip = Bounds::from_corners(first.origin, last.origin + point(g.cell_w, g.line_h));
+            cards[card].panes.push((clip, pane));
+        }
+    }
+
+    if let Some(info) = &frame.info {
+        let area = info.area;
+        if let Some(card) = card_of(area.x as usize, area.y as usize) {
+            let mut pane = Layer::default();
+            crate::picker::paint_info(info, g, theme, window, &mut pane);
+            let clip = cards[card].bounds;
             cards[card].panes.push((clip, pane));
         }
     }
