@@ -222,6 +222,8 @@ true-color = true
 bufferline = "never"
 # The view turns trackpad pixels into one event per line.
 scroll-lines = 1
+# Mode badges (NOR / INS / SEL) take the mode colors; the view draws them as pills.
+color-modes = true
 [editor.cursor-shape]
 insert = "bar"
 "#;

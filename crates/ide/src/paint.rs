@@ -320,6 +320,7 @@ struct CellPaint {
     fg: Hsla,
     /// `None` for no fill, and for a card's own surface (the card paints it).
     bg: Option<Hsla>,
+    bg_token: Option<Token>,
     bold: bool,
     italic: bool,
     hidden: bool,
@@ -329,8 +330,9 @@ struct CellPaint {
 
 fn resolve_cell(cell: &tui::buffer::Cell, theme: &Theme) -> CellPaint {
     let mut fg = theme::resolve(cell.fg, theme).unwrap_or(theme.text);
-    let card_surface = Token::of(cell.bg) == Some(Token::Overlay);
-    let mut bg = if card_surface {
+    let bg_token = Token::of(cell.bg);
+    // A card paints its own surface; the statusline is a strip, not a band.
+    let mut bg = if matches!(bg_token, Some(Token::Overlay | Token::StatusBar)) {
         None
     } else {
         theme::resolve(cell.bg, theme)
@@ -354,6 +356,7 @@ fn resolve_cell(cell: &tui::buffer::Cell, theme: &Theme) -> CellPaint {
     CellPaint {
         fg,
         bg,
+        bg_token,
         bold: cell.modifier.contains(Modifier::BOLD),
         italic: cell.modifier.contains(Modifier::ITALIC),
         hidden: cell.modifier.contains(Modifier::HIDDEN),
@@ -430,30 +433,73 @@ pub(crate) fn paint_frame(
             .collect();
         let owners: Vec<Option<usize>> = (0..cols).map(|col| card_of(col, row)).collect();
 
-        // Backgrounds: one quad per run of equal color within one owner.
-        let mut run: Option<(usize, Hsla, Option<usize>)> = None;
+        // The statusline: a hairline along its top instead of a band.
+        let mut status: Option<usize> = None;
         for col in 0..=cols {
-            let next = paints
-                .get(col)
-                .and_then(|paint| paint.bg.map(|bg| (bg, owners[col])));
+            let on_status = paints.get(col).is_some_and(|paint| {
+                paint
+                    .bg_token
+                    .is_some_and(|token| token == Token::StatusBar || token.is_badge())
+            });
+            match (status, on_status) {
+                (None, true) => status = Some(col),
+                (Some(start), false) => {
+                    base.rules.push(fill(
+                        Bounds::new(
+                            point(g.origin.x + g.cell_w * start as f32, y),
+                            size(g.cell_w * (col - start) as f32, px(1.0)),
+                        ),
+                        theme.border,
+                    ));
+                    status = None;
+                }
+                _ => {}
+            }
+        }
+
+        // Backgrounds: one quad per run of equal color within one owner.
+        let mut run: Option<(usize, Hsla, Option<usize>, bool)> = None;
+        for col in 0..=cols {
+            let next = paints.get(col).and_then(|paint| {
+                let badge = paint.bg_token.is_some_and(Token::is_badge);
+                paint.bg.map(|bg| (bg, owners[col], badge))
+            });
             match (run, next) {
-                (Some((_, color, owner)), Some((bg, next_owner)))
+                (Some((_, color, owner, _)), Some((bg, next_owner, _)))
                     if color == bg && owner == next_owner => {}
                 (current, next) => {
-                    if let Some((start, color, owner)) = current {
-                        let quad = fill(
-                            Bounds::new(
-                                point(g.origin.x + g.cell_w * start as f32, y),
-                                size(g.cell_w * (col - start) as f32, g.line_h),
-                            ),
-                            color,
+                    if let Some((start, color, owner, badge)) = current {
+                        let cells = Bounds::new(
+                            point(g.origin.x + g.cell_w * start as f32, y),
+                            size(g.cell_w * (col - start) as f32, g.line_h),
                         );
+                        let quad = if badge {
+                            // Mode badge: a pill inset from the row.
+                            let inset = (g.line_h * 0.18).round();
+                            let pill = Bounds::from_corners(
+                                point(cells.origin.x, cells.origin.y + inset),
+                                point(
+                                    cells.origin.x + cells.size.width,
+                                    cells.origin.y + cells.size.height - inset,
+                                ),
+                            );
+                            quad(
+                                pill,
+                                Corners::all(pill.size.height / 2.0),
+                                color,
+                                px(0.0),
+                                color,
+                                BorderStyle::Solid,
+                            )
+                        } else {
+                            fill(cells, color)
+                        };
                         match owner {
                             Some(card) => cards[card].layer.quads.push(quad),
                             None => base.quads.push(quad),
                         }
                     }
-                    run = next.map(|(color, owner)| (col, color, owner));
+                    run = next.map(|(color, owner, badge)| (col, color, owner, badge));
                 }
             }
         }

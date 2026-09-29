@@ -64,6 +64,7 @@ tokens! {
     OverlayHighlight => |t: &Theme| t.element_hover,
     StatusBar => |t: &Theme| t.surface_raised,
     ModeNormal => |t: &Theme| t.element_active,
+    ModeInsert => |t: &Theme| t.accent,
     ModeSelect => |t: &Theme| t.warning_muted,
     Danger => |t: &Theme| t.danger,
     Warning => |t: &Theme| t.warning,
@@ -111,6 +112,14 @@ impl Token {
         matches!(
             self,
             Token::Overlay | Token::MenuSelected | Token::MenuScroll | Token::OverlayHighlight
+        )
+    }
+
+    /// Statusline mode badges, drawn as pills.
+    pub fn is_badge(self) -> bool {
+        matches!(
+            self,
+            Token::ModeNormal | Token::ModeInsert | Token::ModeSelect
         )
     }
 
@@ -185,7 +194,7 @@ const SCOPES: &[ScopeStyle] = &[
     (
         "ui.statusline.insert",
         Some(OnAccent),
-        Some(Accent),
+        Some(ModeInsert),
         &["bold"],
         None,
     ),
