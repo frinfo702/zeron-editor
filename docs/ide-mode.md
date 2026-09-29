@@ -94,9 +94,10 @@ that runs on another device shows an explanation instead of an editor.
   editor with an accent line on top. Middle-click closes. Helix's message /
   command line row is hidden and floats as a card above the statusline
   while in use.
-- **Fonts.** The editor's chrome (tabs, pickers, menus, docs) is set in
-  Inter, bundled in `crates/ide/assets/fonts` (`fonts.rs`); code stays in
-  the theme's code font. The grid starts right under the tabs and the
+- **Fonts.** The editor is set in Zed's faces, bundled (subset) in
+  `crates/ide/assets/fonts` (`fonts.rs`): Zed Sans for its chrome (tabs,
+  pickers, menus, docs) and Zed Mono for code. The grid starts right under
+  the tabs and the
   statusline sits on the bottom edge; the fractional-row remainder goes
   above the statusline. The mode badge is a square block, as in Vim.
 - **Edits made on disk.** Helix does not watch files, so the view checks
