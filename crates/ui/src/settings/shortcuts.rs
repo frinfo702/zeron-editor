@@ -500,7 +500,8 @@ fn group(id: ShortcutId) -> &'static str {
         ShortcutId::ToggleSidebar
         | ShortcutId::ToggleChanges
         | ShortcutId::ToggleFiles
-        | ShortcutId::ToggleTerminal => "Panels",
+        | ShortcutId::ToggleTerminal
+        | ShortcutId::ToggleIde => "Panels",
         ShortcutId::NewProject => "Projects",
         ShortcutId::OpenModelPicker
         | ShortcutId::NewSession

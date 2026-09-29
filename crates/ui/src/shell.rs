@@ -65,6 +65,7 @@ mod chat_dropzone_tests;
 mod command_palette;
 mod files_panel;
 mod harness_updates;
+mod ide_mode;
 mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
@@ -100,6 +101,7 @@ actions!(
         ToggleSidebar,
         ToggleChanges,
         ToggleFiles,
+        ToggleIde,
         AddSpacePalette,
         ToggleCommandPalette,
         OpenModelPicker,
@@ -450,6 +452,11 @@ pub fn apply_keymap(
         KeyBinding::new(
             &valid_or_default(&keymap.toggle_terminal, "mod-j"),
             ToggleTerminal,
+            None,
+        ),
+        KeyBinding::new(
+            &valid_or_default(&keymap.toggle_ide, "mod-shift-i"),
+            ToggleIde,
             None,
         ),
         KeyBinding::new(
@@ -1798,6 +1805,10 @@ pub struct Shell {
     /// One independent editor per opened workspace file. IDs are global
     /// while the lookup key keeps a file tab scoped to its chat panel.
     file_surfaces: std::collections::HashMap<u64, Entity<FilesSurface>>,
+    /// IDE mode editors, one per local workspace folder (see `ide_mode`).
+    ide_editors: std::collections::HashMap<PathBuf, std::rc::Rc<dyn crate::ide::IdeEditor>>,
+    /// Folder IDE mode shows instead of the session's (Helix config files).
+    ide_workspace_override: Option<PathBuf>,
     file_surface_paths: std::collections::HashMap<u64, String>,
     /// Open editors by (pane, owning chat, path): a side chat's file links
     /// open editors bound to the side chat, beside the main chat's own.
@@ -2253,6 +2264,8 @@ impl Shell {
             files: std::collections::HashMap::new(),
             files_subs: std::collections::HashMap::new(),
             file_surfaces: std::collections::HashMap::new(),
+            ide_editors: std::collections::HashMap::new(),
+            ide_workspace_override: None,
             file_surface_paths: std::collections::HashMap::new(),
             file_surface_keys: std::collections::HashMap::new(),
             file_surface_subs: std::collections::HashMap::new(),
@@ -6234,6 +6247,10 @@ impl Shell {
                         cx.listener(|this, _, _, cx| this.open_new_session(cx)),
                     ))
             }))
+            .children(
+                (crate::ide::available(cx) && matches!(self.route, Route::Chat))
+                    .then(|| self.render_workspace_mode_switch(&theme, cx)),
+            )
             .into_any_element()
     }
 
@@ -12098,6 +12115,7 @@ impl Render for Shell {
         self.settings.accent = crate::appearance::accent(cx);
         self.settings.surface = crate::appearance::surface(cx);
         self.sync_independent_settings(cx);
+        self.sync_ide_settings(cx);
         let theme = Theme::of(cx);
         // The shell frost sits over native desktop blur on macOS and Windows.
         // Content surfaces add their own backgrounds over this shared tint.
@@ -12358,6 +12376,11 @@ impl Render for Shell {
                     this.toggle_files_panel(window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &ToggleIde, window, cx| {
+                if matches!(this.route, Route::Chat) {
+                    this.toggle_workspace_mode(window, cx);
+                }
+            }))
             // Chat-scoped like the panel toggles: Settings has no current
             // session to archive. Quiet under an open popover, like the other
             // session-nav shortcuts.
@@ -12544,7 +12567,11 @@ impl Render for Shell {
                     },
                     cx,
                 );
-                let main = self.render_main(window, main_content_width, transcript_width, cx);
+                let main = if self.ide_mode_active(cx) {
+                    self.render_ide(window, cx)
+                } else {
+                    self.render_main(window, main_content_width, transcript_width, cx)
+                };
                 // The Changes pane is chat-scoped chrome: the Settings route
                 // never renders it (zeron __root.tsx `!isSettings && activeChat`
                 // around the diff column) — the per-session open flags stay

@@ -26,12 +26,12 @@ use helix_view::{
     input::{Event, MouseButton as HelixButton, MouseEvent, MouseEventKind},
     keyboard::KeyModifiers,
 };
-use zeron_ui::theme::Theme;
+use zeron_ui::{ide::IdeSettings, theme::Theme};
 
 use crate::{
     dirs::IdeDirs,
     host::{Frame, HelixHost, HostOptions},
-    keymap::{self, KeymapMode},
+    keymap,
     keys, theme,
 };
 
@@ -47,7 +47,7 @@ pub struct EditorOptions {
     pub dirs: IdeDirs,
     pub workspace: PathBuf,
     pub files: Vec<PathBuf>,
-    pub keymap: KeymapMode,
+    pub settings: IdeSettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +79,9 @@ struct Geometry {
 
 pub struct HelixEditor {
     host: Option<HelixHost>,
+    dirs: IdeDirs,
+    workspace_dir: PathBuf,
+    settings: IdeSettings,
     frame: Option<Arc<Frame>>,
     focus: FocusHandle,
     status: EditorStatus,
@@ -100,18 +103,10 @@ impl HelixEditor {
             dirs,
             workspace,
             files,
-            keymap,
+            settings,
         } = options;
-        let global = std::fs::read_to_string(dirs.config_file()).ok();
-        let local = std::fs::read_to_string(workspace.join(".helix/config.toml")).ok();
-        let (config, config_error) =
-            match keymap::build_config(keymap, global.as_deref(), local.as_deref()) {
-                Ok(config) => (config, None),
-                Err(err) => (
-                    keymap::build_config(keymap, None, None).expect("built-in layers load"),
-                    Some(SharedString::from(format!("config.toml: {err}"))),
-                ),
-            };
+        let workspace_dir = workspace.clone();
+        let (config, config_error) = load_config(&dirs, &workspace, &settings);
         let use_zeron_theme = config.theme.is_none();
 
         let (wake_tx, mut wake_rx) = mpsc::unbounded();
@@ -132,7 +127,7 @@ impl HelixEditor {
                 if use_zeron_theme {
                     host.call(|app| app.editor.set_theme(theme::helix_theme()));
                 }
-                if keymap.is_modeless() {
+                if keymap::is_modeless(settings.keymap) {
                     host.call(|app| app.editor.mode = Mode::Insert);
                 }
                 (Some(host), EditorStatus::Running)
@@ -188,6 +183,9 @@ impl HelixEditor {
 
         Self {
             host,
+            dirs,
+            workspace_dir,
+            settings,
             frame: None,
             focus,
             status,
@@ -199,6 +197,27 @@ impl HelixEditor {
             _wake: wake,
             _subscriptions: vec![intercept, focus_in, focus_out],
         }
+    }
+
+    /// Rebuild the Helix config from `settings` (and the files on disk) and
+    /// apply it live: keymap mode, gutter, wrapping.
+    pub fn apply_settings(&mut self, settings: IdeSettings, cx: &mut Context<Self>) {
+        let (config, config_error) = load_config(&self.dirs, &self.workspace_dir, &settings);
+        let was_modeless = keymap::is_modeless(self.settings.keymap);
+        let modeless = keymap::is_modeless(settings.keymap);
+        self.settings = settings;
+        self.config_error = config_error;
+        if let Some(host) = &self.host {
+            host.call(move |app| {
+                app.replace_config(config);
+                if modeless {
+                    app.editor.mode = Mode::Insert;
+                } else if was_modeless {
+                    app.editor.enter_normal_mode();
+                }
+            });
+        }
+        cx.notify();
     }
 
     pub fn status(&self) -> &EditorStatus {
@@ -328,6 +347,24 @@ impl HelixEditor {
             };
             self.send_mouse(kind, event.position, &event.modifiers);
         }
+    }
+}
+
+/// The layered config for `settings`; a bad `config.toml` falls back to the
+/// built-in layers and reports the problem.
+fn load_config(
+    dirs: &IdeDirs,
+    workspace: &std::path::Path,
+    settings: &IdeSettings,
+) -> (helix_term::config::Config, Option<SharedString>) {
+    let global = std::fs::read_to_string(dirs.config_file()).ok();
+    let local = std::fs::read_to_string(workspace.join(".helix/config.toml")).ok();
+    match keymap::build_config(settings, global.as_deref(), local.as_deref()) {
+        Ok(config) => (config, None),
+        Err(err) => (
+            keymap::build_config(settings, None, None).expect("built-in layers load"),
+            Some(SharedString::from(format!("config.toml: {err}"))),
+        ),
     }
 }
 

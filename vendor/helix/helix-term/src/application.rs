@@ -1235,6 +1235,19 @@ pub mod headless {
             self.refresh_config();
         }
 
+        /// Swap in a host-built config (keymap and editor options) live, the
+        /// way `:config-reload` applies a re-read file.
+        pub fn replace_config(&mut self, config: Config) {
+            let old_editor_config = self.editor.config();
+            self.config.store(Arc::new(config));
+            self.editor.refresh_config(&old_editor_config);
+            let scrolloff = self.editor.config().scrolloff;
+            for (view, _) in self.editor.tree.views() {
+                let doc = doc_mut!(self.editor, &view.doc);
+                view.ensure_cursor_in_view(doc, scrolloff);
+            }
+        }
+
         /// Force a frame out to the sink.
         pub async fn redraw(&mut self) {
             self.render().await;

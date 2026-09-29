@@ -13704,6 +13704,7 @@ dependencies = [
  "tracing-subscriber",
  "windows-sys 0.61.2",
  "zeron-engine",
+ "zeron-ide",
  "zeron-mcp",
  "zeron-rpc",
  "zeron-ui",

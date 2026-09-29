@@ -33,26 +33,29 @@ fn main() -> anyhow::Result<()> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     let files: Vec<_> = args.map(std::path::PathBuf::from).collect();
-    let keymap = match std::env::var("ZERON_IDE_KEYMAP").as_deref() {
-        Ok("standard") => KeymapMode::Standard,
-        Ok("vim") => KeymapMode::Vim,
-        _ => KeymapMode::Helix,
+    let settings = zeron_ui::ide::IdeSettings {
+        keymap: match std::env::var("ZERON_IDE_KEYMAP").as_deref() {
+            Ok("standard") => KeymapMode::Standard,
+            Ok("vim") => KeymapMode::Vim,
+            _ => KeymapMode::Helix,
+        },
+        ..Default::default()
     };
 
     gpui_platform::application()
         .with_assets(icons::Assets)
         .run(move |cx| {
             gpui_tokio::init(cx);
-            let settings = settings::UiSettings::default();
-            settings::init(settings.clone(), data.path().to_path_buf(), cx);
+            let ui = settings::UiSettings::default();
+            settings::init(ui.clone(), data.path().to_path_buf(), cx);
             let fonts = typography::register_fonts(cx);
             typography::init(
-                settings.ui_font_family.clone(),
-                settings.ui_font_size,
-                settings.terminal_font_family.clone(),
-                settings.terminal_font_size,
-                settings.code_font_family.clone(),
-                settings.code_font_size,
+                ui.ui_font_family.clone(),
+                ui.ui_font_size,
+                ui.terminal_font_family.clone(),
+                ui.terminal_font_size,
+                ui.code_font_family.clone(),
+                ui.code_font_size,
                 fonts,
                 cx,
             );
@@ -63,8 +66,8 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     appearance::AppearanceMode::Dark
                 },
-                settings.theme_selection,
-                settings.accent,
+                ui.theme_selection,
+                ui.accent,
                 zeron_theme::SurfacePreference::Opaque,
                 cx,
             );
@@ -89,7 +92,7 @@ fn main() -> anyhow::Result<()> {
                                     dirs: dirs.clone(),
                                     workspace: workspace.clone(),
                                     files: files.clone(),
-                                    keymap,
+                                    settings: settings.clone(),
                                 },
                                 window,
                                 cx,

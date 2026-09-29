@@ -12,51 +12,19 @@
 //! 4. the user's `config.toml` `[keys]`, so a user binding always wins.
 
 use helix_term::config::{Config, ConfigLoadError};
-use serde::{Deserialize, Serialize};
+pub use zeron_ui::ide::IdeKeymap as KeymapMode;
+use zeron_ui::ide::{IdeLineNumbers, IdeSettings};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum KeymapMode {
-    /// Non-modal: always inserting, selection with Shift+arrows, VS Code-like
-    /// shortcuts.
-    Standard,
-    /// Vim motions and operators, approximated on Helix's selection model.
-    Vim,
-    /// Helix's own keymap, unchanged.
-    #[default]
-    Helix,
+/// Whether the editor should sit in insert mode permanently.
+pub fn is_modeless(mode: KeymapMode) -> bool {
+    mode == KeymapMode::Standard
 }
 
-impl KeymapMode {
-    pub const ALL: [Self; 3] = [Self::Standard, Self::Vim, Self::Helix];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Standard => "Standard",
-            Self::Vim => "Vim",
-            Self::Helix => "Helix",
-        }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::Standard => "Non-modal editing with familiar shortcuts",
-            Self::Vim => "Vim motions and operators",
-            Self::Helix => "Helix's selection-first modal editing",
-        }
-    }
-
-    /// Whether the editor should sit in insert mode permanently.
-    pub fn is_modeless(self) -> bool {
-        self == Self::Standard
-    }
-
-    fn layer(self) -> &'static str {
-        match self {
-            Self::Standard => STANDARD_LAYER,
-            Self::Vim => VIM_LAYER,
-            Self::Helix => "",
-        }
+fn layer(mode: KeymapMode) -> &'static str {
+    match mode {
+        KeymapMode::Standard => STANDARD_LAYER,
+        KeymapMode::Vim => VIM_LAYER,
+        KeymapMode::Helix => "",
     }
 }
 
@@ -258,16 +226,30 @@ scroll-lines = 1
 insert = "bar"
 "#;
 
-/// Build the Helix config for `mode`: Helix defaults ← GUI layer ← mode layer
-/// ← `global` (the user's `config.toml`, if any) ← `local` (the workspace's
-/// `.helix/config.toml`, if any).
+/// The settings-page options as a Helix `[editor]` table.
+fn settings_layer(settings: &IdeSettings) -> toml::Value {
+    let line_number = match settings.line_numbers {
+        IdeLineNumbers::Absolute => "absolute",
+        IdeLineNumbers::Relative => "relative",
+    };
+    let source = format!(
+        "[editor]\nline-number = \"{line_number}\"\ncursorline = {}\n[editor.soft-wrap]\nenable = {}\n",
+        settings.cursorline, settings.soft_wrap,
+    );
+    toml::from_str(&source).expect("settings layer is valid toml")
+}
+
+/// Build the Helix config: Helix defaults ← GUI defaults ← Zeron's settings
+/// page ← GUI keys ← keymap-mode keys ← `global` (the user's `config.toml`,
+/// if any) ← `local` (the workspace's `.helix/config.toml`, if any).
 pub fn build_config(
-    mode: KeymapMode,
+    settings: &IdeSettings,
     global: Option<&str>,
     local: Option<&str>,
 ) -> Result<Config, ConfigLoadError> {
     let mut merged = parse(GUI_EDITOR_DEFAULTS)?;
-    for layer in [GUI_LAYER, mode.layer()] {
+    merged = helix_loader::merge_toml_values(merged, settings_layer(settings), 3);
+    for layer in [GUI_LAYER, layer(settings.keymap)] {
         merged = helix_loader::merge_toml_values(merged, parse(layer)?, 3);
     }
     if let Some(global) = global {
@@ -299,6 +281,13 @@ mod tests {
     use helix_view::document::Mode;
     use helix_view::input::KeyEvent;
 
+    fn with(mode: KeymapMode) -> IdeSettings {
+        IdeSettings {
+            keymap: mode,
+            ..IdeSettings::default()
+        }
+    }
+
     fn bound(config: &Config, mode: Mode, key: &str) -> bool {
         let key: KeyEvent = key.parse().unwrap();
         config.keys[&mode].search(&[key]).is_some()
@@ -307,7 +296,7 @@ mod tests {
     #[test]
     fn every_mode_builds_with_valid_commands() {
         for mode in KeymapMode::ALL {
-            build_config(mode, None, None)
+            build_config(&with(mode), None, None)
                 .unwrap_or_else(|err| panic!("{mode:?} layer does not load: {err}"));
         }
     }
@@ -315,7 +304,7 @@ mod tests {
     #[test]
     fn gui_layer_applies_in_every_mode() {
         for mode in KeymapMode::ALL {
-            let config = build_config(mode, None, None).unwrap();
+            let config = build_config(&with(mode), None, None).unwrap();
             for helix_mode in [Mode::Normal, Mode::Select, Mode::Insert] {
                 assert!(bound(&config, helix_mode, "Cmd-s"), "{mode:?} {helix_mode:?}");
             }
@@ -325,7 +314,7 @@ mod tests {
     #[test]
     fn user_config_wins_over_mode_layers() {
         let user = "[keys.insert]\n\"Cmd-s\" = \"no_op\"\n[editor]\nbufferline = \"always\"\n";
-        let config = build_config(KeymapMode::Standard, Some(user), None).unwrap();
+        let config = build_config(&with(KeymapMode::Standard), Some(user), None).unwrap();
         let key: KeyEvent = "Cmd-s".parse().unwrap();
         let bound = config.keys[&Mode::Insert].search(&[key]).unwrap();
         assert!(format!("{bound:?}").contains("no_op"));
@@ -337,11 +326,11 @@ mod tests {
 
     #[test]
     fn helix_mode_keeps_helix_defaults() {
-        let config = build_config(KeymapMode::Helix, None, None).unwrap();
+        let config = build_config(&with(KeymapMode::Helix), None, None).unwrap();
         let key: KeyEvent = "w".parse().unwrap();
         let bound = config.keys[&Mode::Normal].search(&[key]).unwrap();
         assert!(format!("{bound:?}").contains("move_next_word_start"));
-        let vim = build_config(KeymapMode::Vim, None, None).unwrap();
+        let vim = build_config(&with(KeymapMode::Vim), None, None).unwrap();
         let bound = vim.keys[&Mode::Normal].search(&[key]).unwrap();
         assert!(format!("{bound:?}").contains("collapse_selection"));
     }
@@ -394,6 +383,26 @@ mod tests {
         }
         parts.push(key);
         parts.join("-")
+    }
+
+    #[test]
+    fn settings_page_options_reach_the_editor_config() {
+        let settings = IdeSettings {
+            line_numbers: IdeLineNumbers::Relative,
+            soft_wrap: true,
+            cursorline: false,
+            ..IdeSettings::default()
+        };
+        let config = build_config(&settings, None, None).unwrap();
+        assert_eq!(
+            config.editor.line_number,
+            helix_view::editor::LineNumber::Relative
+        );
+        assert_eq!(config.editor.soft_wrap.enable, Some(true));
+        assert!(!config.editor.cursorline);
+        // …but the user's file still wins.
+        let user = "[editor]\ncursorline = true\n";
+        assert!(build_config(&settings, Some(user), None).unwrap().editor.cursorline);
     }
 
     #[test]

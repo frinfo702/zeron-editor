@@ -175,7 +175,11 @@ impl Shell {
                     FilesEvent::OpenFile(path)
                         if this.accepts_file_navigation(&owner, &source, cx) =>
                     {
-                        this.add_file_surface(path.clone(), window, cx);
+                        if this.ide_mode_active(cx) {
+                            this.ide_open_path(path, window, cx);
+                        } else {
+                            this.add_file_surface(path.clone(), window, cx);
+                        }
                     }
                     FilesEvent::OpenWebLink(activation) => {
                         if let crate::markdown::render::LinkOutcome::External(url) =
