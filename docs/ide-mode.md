@@ -121,9 +121,12 @@ borrows compiled grammars from an existing Helix install.
   Typing, pasting, Backspace and Delete act on the caret-style selection
   (`standard.rs`), but Helix still paints its range, which always includes
   the character under the cursor.
-- **Off macOS, Ctrl chords go to the editor** while it has focus, and
-  Zeron's `Mod` shortcuts (Ctrl there) are shadowed. `Mod-Shift-I` is one of
-  them.
+- **Off macOS, most Ctrl chords go to the editor** while it has focus, so
+  Zeron's other `Mod` shortcuts (Ctrl there) are shadowed. The Agent/IDE
+  switch and the sidebar, terminal, files and changes toggles always pass
+  through (`zeron_ui::ide::passthrough_shortcuts`, following rebinds). With
+  the default bindings that takes Ctrl-B, Ctrl-J, Ctrl-E and Ctrl-R from
+  Helix on Linux and Windows.
 - The IME path is covered by tests up to the Helix side (a committed string
   is typed and saved). A real macOS IME session has not been exercised in
   CI.

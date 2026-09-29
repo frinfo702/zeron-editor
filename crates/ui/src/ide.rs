@@ -170,3 +170,49 @@ pub fn create(request: IdeRequest, window: &mut Window, cx: &mut App) -> Option<
 pub fn services(cx: &App) -> Option<Rc<dyn IdeServices>> {
     cx.try_global::<Registry>().map(|r| r.services.clone())
 }
+
+/// Zeron shortcuts that keep working while the editor has focus: getting out
+/// of IDE mode and toggling the panes around it. Everything else — on Linux
+/// and Windows that includes every other Ctrl chord — belongs to the editor.
+/// Follows the user's rebinds.
+pub fn passthrough_shortcuts(cx: &App) -> Vec<gpui::Keystroke> {
+    use crate::settings::{self, ShortcutId};
+    let keymap = settings::current(cx).keymap;
+    [
+        ShortcutId::ToggleIde,
+        ShortcutId::ToggleSidebar,
+        ShortcutId::ToggleTerminal,
+        ShortcutId::ToggleFiles,
+        ShortcutId::ToggleChanges,
+    ]
+    .into_iter()
+    .filter_map(|id| gpui::Keystroke::parse(&settings::platform_combo(keymap.get(id))).ok())
+    .collect()
+}
+
+/// Whether `keystroke` is one of [`passthrough_shortcuts`].
+pub fn is_passthrough(keystroke: &gpui::Keystroke, cx: &App) -> bool {
+    let pressed = keystroke.unparse();
+    passthrough_shortcuts(cx)
+        .iter()
+        .any(|shortcut| shortcut.unparse() == pressed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn pane_toggles_pass_through_the_editor(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let dir = tempfile::tempdir().unwrap();
+            crate::settings::init(Default::default(), dir.path().to_path_buf(), cx);
+            let primary = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };
+            let parse = |s: &str| gpui::Keystroke::parse(s).unwrap();
+            assert!(is_passthrough(&parse(&format!("{primary}-shift-i")), cx));
+            assert!(is_passthrough(&parse(&format!("{primary}-b")), cx));
+            // Save and the rest stay with the editor.
+            assert!(!is_passthrough(&parse(&format!("{primary}-s")), cx));
+        });
+    }
+}

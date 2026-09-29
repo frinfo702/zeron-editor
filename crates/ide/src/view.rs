@@ -170,6 +170,10 @@ impl HelixEditor {
         let weak = cx.entity().downgrade();
         let intercept = cx.intercept_keystrokes(move |event, window, cx| {
             let Some(this) = weak.upgrade() else { return };
+            // Pane toggles and the Agent/IDE switch stay Zeron's.
+            if zeron_ui::ide::is_passthrough(&event.keystroke, cx) {
+                return;
+            }
             let handled = this.update(cx, |this, cx| {
                 this.focus.contains_focused(window, cx) && this.handle_keystroke(&event.keystroke)
             });
