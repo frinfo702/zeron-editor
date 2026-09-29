@@ -26,9 +26,16 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
 - `helix-stdx`: `set_host_owns_process_cwd` keeps Helix's working directory in
   its own static instead of `std::env::set_current_dir`; the subprocesses that
   relied on the process cwd (shell commands, `%sh{}`, DAP) pass it explicitly.
-- `helix-term`: `headless` feature — renders into an in-memory buffer, hands
-  each frame to a host sink, takes input from a host stream
-  (`application::headless`), installs no signal handlers. `compositor` and
-  `jobs` on `Application` are `pub` for the host.
+- `helix-term`: `headless` feature (`application::headless`) —
+  - renders into an in-memory buffer and hands each frame to a host sink;
+  - takes input (events, or closures over the `Application`) from a host
+    stream, and installs no signal handlers;
+  - never exits on its own: closing the last view opens a scratch buffer,
+    because Helix's event registry and cwd are process-global and a second
+    `Application` in one process panics at hook registration;
+  - `HostConfig`: `:config-reload` rebuilds the config through the host
+    (Zeron layers its keymap modes and settings under `config.toml`) and
+    keeps the host theme while the config names none;
+  - `compositor` and `jobs` on `Application` are `pub` for the host.
 - `helix-term/src/compositor.rs`: `top_type_name` reports the front-most
   layer, so the host knows when text input (and so the IME) applies.
