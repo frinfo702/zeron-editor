@@ -226,12 +226,31 @@ impl<T: Component> Popup<T> {
             ..
         }: &MouseEvent,
     ) -> EventResult {
-        let mouse_is_within_popup = x >= self.area.left()
+        // zeron: a host drawing this popup keeps clicks on its own card, so
+        // any click that reaches Helix is outside it.
+        let hosted = crate::ui::host_view::host_draws_popups()
+            && self.contents.host_views().iter().any(|view| {
+                matches!(
+                    view,
+                    crate::ui::host_view::HostView::Doc(_)
+                        | crate::ui::host_view::HostView::Signature(_)
+                )
+            });
+        let mouse_is_within_popup = !hosted
+            && x >= self.area.left()
             && x < self.area.right()
             && y >= self.area.top()
             && y < self.area.bottom();
 
         if !mouse_is_within_popup {
+            // zeron: a click elsewhere dismisses the popup (and still moves
+            // the cursor), instead of the popup following the cursor there.
+            if matches!(kind, MouseEventKind::Down(_)) {
+                let id = self.id;
+                return EventResult::Ignored(Some(Box::new(move |compositor, _| {
+                    compositor.remove(id);
+                })));
+            }
             return EventResult::Ignored(None);
         }
 

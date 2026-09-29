@@ -68,3 +68,7 @@ Removed from the upstream tree: book/, contrib/, docs/, xtask/, nix files,
   opened below or above the cursor). With `host_view::set_host_draws_popups`
   a `Popup` holding docs or signature help only lays itself out and leaves
   the cells beneath unpainted, so the host can size its card to the content.
+- `Popup` closes on a mouse press outside it (the press still reaches the
+  editor), instead of following the cursor to the click. When the host
+  draws the popup it keeps presses on its card, so every press Helix sees
+  counts as outside.

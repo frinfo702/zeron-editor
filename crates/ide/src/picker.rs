@@ -74,7 +74,12 @@ pub enum Hit {
     Pane,
 }
 
-pub fn hit(view: &PickerView, g: &Geometry, (col, row): (u16, u16), y: Pixels) -> Option<Hit> {
+pub(crate) fn hit(
+    view: &PickerView,
+    g: &Geometry,
+    (col, row): (u16, u16),
+    y: Pixels,
+) -> Option<Hit> {
     let inner = inner(view);
     let inside = col >= inner.x
         && col < inner.x + inner.width
