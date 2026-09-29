@@ -35,6 +35,11 @@ install -m 644 "$ROOT/dist/zeron.desktop" "$STAGE/zeron.desktop"
 install -m 644 "$ROOT/dist/zeron.png" "$STAGE/zeron.png"
 mkdir -p "$STAGE/licenses/fonts"
 cp "$ROOT/crates/ui/assets/fonts/licenses/"* "$STAGE/licenses/fonts/"
+# IDE mode: Helix's queries, themes and tutor beside the binary (MPL-2.0);
+# grammars are fetched and built at runtime into the data dir.
+mkdir -p "$STAGE/helix-runtime" "$STAGE/licenses/helix"
+rsync -a --exclude grammars "$ROOT/vendor/helix/runtime/" "$STAGE/helix-runtime/"
+cp "$ROOT/vendor/helix/LICENSE" "$STAGE/licenses/helix/LICENSE"
 
 cat >"$STAGE/install.sh" <<'INSTALL'
 #!/usr/bin/env bash

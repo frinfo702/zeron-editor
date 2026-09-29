@@ -13,6 +13,13 @@ Zeron bundles the following syntax-highlighting components. Unless noted otherwi
 | Tree-sitter TOML, Markdown, YAML, Swift, SQL, Lua, Nix, Make and Containerfile grammars and queries | pinned in `Cargo.lock` | MIT-compatible; see each crate | Crate repositories recorded in `Cargo.lock` |
 | Tree-sitter Kotlin grammar | 1.1.0 | MIT | https://github.com/tree-sitter-grammars/tree-sitter-kotlin |
 
+IDE mode embeds the Helix editor. Its sources are vendored unmodified except where marked `// zeron:` (see `vendor/helix/VENDORED.md`); those files, including Zeron's changes to them, remain under the MPL-2.0, and their source is available in this repository. Packages ship Helix's runtime queries and themes under `helix-runtime/` with the license in `licenses/helix/`.
+
+| Component | Version | License | Source |
+| --- | --- | --- | --- |
+| Helix (helix-core, helix-view, helix-term, helix-lsp, helix-loader and related crates, runtime queries and themes) | 25.07.1 (`a05c151`) | MPL-2.0 | https://github.com/helix-editor/helix |
+| tree-house | 0.4.0 | MPL-2.0 | https://github.com/helix-editor/tree-house |
+
 Zeron also uses the following editor foundations from the pinned `zeronsh/gpui-component` fork. The fork aligns these crates with the same GPUI revision used by Comet.
 
 | Component | Version | License | Source |

@@ -77,6 +77,13 @@ try {
     $licenses = Join-Path $stage 'licenses/fonts'
     New-Item -ItemType Directory -Force -Path $licenses | Out-Null
     Copy-Item -Path 'crates/ui/assets/fonts/licenses/*' -Destination $licenses
+    # IDE mode: Helix's queries, themes and tutor beside the executable
+    # (MPL-2.0); grammars are fetched and built at runtime into the data dir.
+    $helixRuntime = Join-Path $stage 'helix-runtime'
+    Copy-Item -Recurse -Path 'vendor/helix/runtime' -Destination $helixRuntime -Exclude 'grammars'
+    $helixLicense = Join-Path $stage 'licenses/helix'
+    New-Item -ItemType Directory -Force -Path $helixLicense | Out-Null
+    Copy-Item -LiteralPath 'vendor/helix/LICENSE' -Destination $helixLicense
     Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip" -Force
     Copy-Item -LiteralPath './target/release/zeron.exe' -Destination "$stage.exe"
     # The per-user installer wraps the same staged directory (zeron-update.json
