@@ -77,7 +77,7 @@ priority:
 1. Helix defaults
 2. GUI defaults (`true-color`, bar cursor in insert, …)
 3. Settings → Editor options
-4. GUI keys (⌘S / ⌘Z / ⌘C / ⌘X / ⌘V / ⌘A / ⌘F / ⌘P / ⌘⇧P / ⌘/, in every mode)
+4. GUI keys (⌘S / ⌘Z / ⌘C / ⌘X / ⌘V / ⌘A / ⌘F / ⌘⇧F / ⌘P / ⌘⇧P / ⌘/ / ⌘W, in every mode; ⌘W closes the buffer, not the window)
 5. The keymap-mode layer
 6. The user's `config.toml`
 7. The workspace's `.helix/config.toml`

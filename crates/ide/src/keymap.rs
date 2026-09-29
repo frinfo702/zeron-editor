@@ -45,6 +45,8 @@ pub const PLATFORM_KEYS: &[&str] = &[
     "cmd-shift-g",
     "cmd-p",
     "cmd-shift-p",
+    "cmd-shift-f",
+    "cmd-w",
     "cmd-/",
     "cmd-left",
     "cmd-right",
@@ -74,6 +76,8 @@ const GUI_LAYER: &str = r#"
 "Cmd-G" = "search_prev"
 "Cmd-p" = "file_picker"
 "Cmd-P" = "command_palette"
+"Cmd-F" = "global_search"
+"Cmd-w" = ":buffer-close"
 "Cmd-/" = "toggle_comments"
 
 [keys.select]
@@ -89,6 +93,8 @@ const GUI_LAYER: &str = r#"
 "Cmd-G" = "extend_search_prev"
 "Cmd-p" = "file_picker"
 "Cmd-P" = "command_palette"
+"Cmd-F" = "global_search"
+"Cmd-w" = ":buffer-close"
 "Cmd-/" = "toggle_comments"
 
 [keys.insert]
@@ -101,6 +107,8 @@ const GUI_LAYER: &str = r#"
 "Cmd-a" = "select_all"
 "Cmd-p" = "file_picker"
 "Cmd-P" = "command_palette"
+"Cmd-F" = "global_search"
+"Cmd-w" = ":buffer-close"
 "Cmd-/" = "toggle_comments"
 "#;
 
