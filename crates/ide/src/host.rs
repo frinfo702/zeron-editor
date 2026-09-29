@@ -43,6 +43,43 @@ pub struct Frame {
     /// Whether typed text goes somewhere (insert mode, or a prompt or picker
     /// on top) — the platform IME only composes while this holds.
     pub accepts_text: bool,
+    /// Open buffers in Helix's order, for the view's tab strip.
+    pub buffers: Vec<BufferTab>,
+}
+
+/// One open buffer, as the tab strip shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BufferTab {
+    pub id: helix_view::DocumentId,
+    /// File name (or `[scratch]`).
+    pub name: String,
+    /// Workspace-relative path, for disambiguation and tooltips.
+    pub path: String,
+    pub modified: bool,
+    /// Shown in the focused view.
+    pub active: bool,
+}
+
+fn buffers(editor: &helix_view::Editor) -> Vec<BufferTab> {
+    let active = editor.tree.get(editor.tree.focus).doc;
+    editor
+        .documents()
+        .map(|doc| {
+            let path = doc.display_name().into_owned();
+            let name = doc
+                .path()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.clone());
+            BufferTab {
+                id: doc.id(),
+                name,
+                path,
+                modified: doc.is_modified(),
+                active: doc.id() == active,
+            }
+        })
+        .collect()
 }
 
 impl Frame {
@@ -53,6 +90,7 @@ impl Frame {
             cursor_kind: frame.cursor_kind,
             mode: frame.editor.mode(),
             accepts_text: accepts_text(frame),
+            buffers: buffers(frame.editor),
         }
     }
 }

@@ -595,13 +595,12 @@ impl Render for HelixEditor {
             (EditorStatus::Running, Some(err)) => Some((err.clone(), theme.warning)),
             (EditorStatus::Running, None) => None,
         };
-        div()
-            .id("helix-editor")
-            .key_context(KEY_CONTEXT)
-            .track_focus(&self.focus)
-            .size_full()
+        let tabs = self.render_tabs(&theme, cx);
+        let grid = div()
+            .id("helix-grid")
+            .flex_1()
+            .min_h_0()
             .relative()
-            .overflow_hidden()
             .cursor_text()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down))
@@ -613,7 +612,18 @@ impl Render for HelixEditor {
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .child(HelixGrid {
                 editor: cx.entity(),
-            })
+            });
+        div()
+            .id("helix-editor")
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .size_full()
+            .relative()
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .children(tabs)
+            .child(grid)
             .when_some(banner, |this, (message, color)| {
                 this.child(
                     div()
@@ -632,6 +642,97 @@ impl Render for HelixEditor {
                         .child(message),
                 )
             })
+    }
+}
+
+impl HelixEditor {
+    /// The open-buffer tab strip: Zeron chrome over Helix's buffer list.
+    /// Hidden while the only buffer is an untouched scratch buffer.
+    fn render_tabs(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let buffers = &self.frame.as_ref()?.buffers;
+        let only_scratch = buffers.len() == 1
+            && buffers[0].path == helix_view::document::SCRATCH_BUFFER_NAME
+            && !buffers[0].modified;
+        if buffers.is_empty() || only_scratch {
+            return None;
+        }
+        let tabs = buffers.iter().enumerate().map(|(ix, tab)| {
+            let id = tab.id;
+            let close_id = tab.id;
+            div()
+                .id(("helix-tab", ix))
+                .group("helix-tab")
+                .h(px(26.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .pl(px(10.0))
+                .pr(px(4.0))
+                .rounded(px(Theme::CONTROL_RADIUS))
+                .text_size(px(12.0))
+                .cursor_pointer()
+                .text_color(if tab.active { theme.text } else { theme.text_muted })
+                .when(tab.active, |el| el.bg(theme.element_active))
+                .when(!tab.active, |el| el.hover(|el| el.bg(theme.element_hover)))
+                .tooltip(zeron_ui::settings::widgets::text_tooltip(tab.path.clone()))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    window.focus(&this.focus, cx);
+                    if let Some(host) = &this.host {
+                        host.call(move |app| {
+                            app.editor.switch(id, helix_view::editor::Action::Replace)
+                        });
+                    }
+                }))
+                .child(tab.name.clone())
+                .child(
+                    div()
+                        .id(("helix-tab-close", ix))
+                        .size(px(16.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .text_size(px(11.0))
+                        .text_color(theme.text_faint)
+                        .hover(|el| el.bg(theme.element_hover).text_color(theme.text))
+                        // The modified dot turns into the close button on hover.
+                        .child(if tab.modified { "●" } else { "×" })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(host) = &this.host {
+                                host.call(move |app| {
+                                    if let Err(err) = app.editor.close_document(close_id, false) {
+                                        use helix_view::editor::CloseError;
+                                        let message = match err {
+                                            CloseError::BufferModified(name) => format!(
+                                                "{name} has unsaved changes (:w to save, :bc! to discard)"
+                                            ),
+                                            CloseError::SaveError(err) => format!("{err:#}"),
+                                            CloseError::DoesNotExist => return,
+                                        };
+                                        app.editor.set_error(message);
+                                    }
+                                });
+                            }
+                        })),
+                )
+        });
+        Some(
+            div()
+                .id("helix-tabs")
+                .flex_none()
+                .h(px(34.0))
+                .px(px(PADDING))
+                .flex()
+                .items_center()
+                .gap(px(2.0))
+                .overflow_x_scroll()
+                .border_b_1()
+                .border_color(theme.border)
+                .children(tabs)
+                .into_any_element(),
+        )
     }
 }
 
